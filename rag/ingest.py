@@ -185,3 +185,22 @@ def get_ingestor() -> DocumentIngestor:
     if _ingestor is None:
         _ingestor = DocumentIngestor()
     return _ingestor
+
+def ingest_pdf(pdf_path: str, session_id: Optional[str] = None) -> int:
+    """
+    Adapter for main.py (Vanshi's module), which expects:
+        ingest_pdf(pdf_path, session_id=...) -> int   (chunk count)
+
+    main.py saves uploads as "{session_id}_{original_filename}" (see
+    UPLOAD_DIR handling in main.py's upload_pdf endpoint), so strip that
+    prefix back off here to get a clean, citation-friendly filename before
+    handing off to the real DocumentIngestor.
+    """
+    filename = os.path.basename(pdf_path)
+    if session_id:
+        prefix = f"{session_id}_"
+        if filename.startswith(prefix):
+            filename = filename[len(prefix):]
+
+    result = get_ingestor().ingest_pdf(pdf_path, filename=filename)
+    return result.chunk_count

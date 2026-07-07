@@ -142,3 +142,26 @@ def retrieve(
         return RetrievalResponse(found=False, query=query)
 
     return RetrievalResponse(found=True, chunks=chunks, query=query)
+
+def retrieve_chunks(query: str, threshold: float = SIMILARITY_THRESHOLD) -> List[dict]:
+    """
+    Adapter for agent/tools.py (Vanshi's module), which expects:
+        retrieve_chunks(query, threshold) -> list[dict]
+        each dict: {"text": str, "filename": str, "page": int, "score": float}
+
+    This wraps the real retrieve() / RetrievalResponse interface above rather
+    than duplicating retrieval logic. Keep this in sync if RetrievedChunk's
+    fields ever change.
+    """
+    response = retrieve(query=query, threshold=threshold)
+    if not response.found:
+        return []
+    return [
+        {
+            "text": c.text,
+            "filename": c.filename,
+            "page": c.page_number,
+            "score": c.similarity,
+        }
+        for c in response.chunks
+    ]

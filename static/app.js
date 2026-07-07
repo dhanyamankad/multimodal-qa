@@ -14,6 +14,7 @@
 const API_BASE = ""; // same-origin, per Section 7 — FastAPI serves these static files too
 let backendReachable = false;
 let sessionId = "session-" + Math.random().toString(36).slice(2, 10);
+let currentHybridMode = "chat"; 
 
 // ---------------------------------------------------------------------------
 // Tab switching
@@ -68,6 +69,7 @@ const chatModeView = document.getElementById("chat-mode-view");
 const reportModeView = document.getElementById("report-mode-view");
 
 function setHybridMode(mode) {
+  currentHybridMode = mode;
   const isChat = mode === "chat";
   chatModeView.classList.toggle("hidden", !isChat);
   reportModeView.classList.toggle("hidden", isChat);
@@ -77,11 +79,11 @@ function setHybridMode(mode) {
   reportModeBtn.classList.toggle("bg-primary-container", !isChat);
   reportModeBtn.classList.toggle("text-on-primary-container", !isChat);
   reportModeBtn.classList.toggle("text-on-surface-variant", isChat);
-  if (!isChat) renderReport(document.getElementById("report-demo-toggle").checked);
+  if (!isChat) renderReport(document.getElementById("report-demo-toggle").checked ? REPORT_WITH_CONFLICT : REPORT_NO_CONFLICT);
 }
 chatModeBtn.addEventListener("click", () => setHybridMode("chat"));
 reportModeBtn.addEventListener("click", () => setHybridMode("report"));
-document.getElementById("report-demo-toggle").addEventListener("change", (e) => renderReport(e.target.checked));
+document.getElementById("report-demo-toggle").addEventListener("change", (e) => renderReport(e.target.checked ? REPORT_WITH_CONFLICT : REPORT_NO_CONFLICT));
 
 // ---- Report Mode data ----
 // Matches the schema in master PRD Section 3.2. These two objects are demo
@@ -129,9 +131,7 @@ function pillarIcon(sourceType) {
   return "description";
 }
 
-function renderReport(showConflictExample) {
-  const data = showConflictExample ? REPORT_WITH_CONFLICT : REPORT_NO_CONFLICT;
-
+function renderReport(data) {
   document.getElementById("report-title").textContent = data.title;
   document.getElementById("report-subtitle").textContent = data.subtitle;
   document.getElementById("report-conclusion").textContent = data.conclusion;
@@ -207,7 +207,7 @@ function renderReport(showConflictExample) {
     traceEl.appendChild(node);
   });
 }
-renderReport(false);
+renderReport(REPORT_NO_CONFLICT);
 
 // Real call — replaces demo fixtures the moment Vanshi's endpoint responds.
 async function fetchReport(message) {
@@ -215,7 +215,7 @@ async function fetchReport(message) {
     const res = await fetch(`${API_BASE}/api/chat/report`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, session_id: sessionId })
+      body: JSON.stringify({ query: message, session_id: sessionId })
     });
     if (!res.ok) throw new Error("report endpoint returned " + res.status);
     return await res.json();
@@ -225,6 +225,22 @@ async function fetchReport(message) {
   }
 }
 
+// Vanshi's /api/chat/report returns { session_id, report: { findings, conflicts,
+// conclusion } } — no title/subtitle field (confirmed directly against her
+// main.py + synthesis.py; it was never part of her schema). renderReport's UI
+// needs those two fields, so we generate them client-side rather than asking
+// her to add fields her synthesis layer has no natural source for.
+function normalizeReport(real, query) {
+  const r = real.report || {};
+  return {
+    title: `Investigation Report: ${query}`,
+    subtitle: "Automated audit comparing available sources for this query.",
+    findings: r.findings || [],
+    conflicts: r.conflicts || [],
+    conclusion: r.conclusion || ""
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Hybrid Chat — send handler (Chat Mode)
 // ---------------------------------------------------------------------------
@@ -232,17 +248,31 @@ document.getElementById("hybrid-chat-send").addEventListener("click", async () =
   const input = document.getElementById("hybrid-chat-input");
   const text = input.value.trim();
   if (!text) return;
-  appendUserBubble("chat-thread", text);
   input.value = "";
+
+  if (currentHybridMode === "report") {
+    // Report Mode: hit the real report endpoint; fall back to the demo
+    // fixture (clearly still gated by the Demo Mode badge) only on failure.
+    const real = await fetchReport(text);
+    if (real) {
+      renderReport(normalizeReport(real, text));
+    } else {
+      renderReport(document.getElementById("report-demo-toggle").checked ? REPORT_WITH_CONFLICT : REPORT_NO_CONFLICT);
+    }
+    return;
+  }
+
+  appendUserBubble("chat-thread", text);
+  const traceEl = beginLiveTrace("chat-thread", text);
   try {
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, session_id: sessionId })
+      body: JSON.stringify({ query: text, session_id: sessionId })
     });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
-    appendAiBubble("chat-thread", data.response || JSON.stringify(data));
+    appendAiBubble("chat-thread", data.answer || JSON.stringify(data));
   } catch (e) {
     console.warn("[demo mode] /api/chat unavailable:", e.message);
     appendAiBubble("chat-thread", "(Demo mode — backend not connected yet. This is where the agent's real synthesized answer will appear.)");
@@ -318,11 +348,12 @@ function handlePdfUpload(file) {
 async function uploadPdf(file, card) {
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("session_id", sessionId); // required Form(...) field on Vanshi's endpoint — was missing, would 422
   try {
     const res = await fetch(`${API_BASE}/api/upload/pdf`, { method: "POST", body: formData });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
-    markDocIndexed(card, `${data.chunk_count ?? "?"} chunks indexed`);
+    markDocIndexed(card, `${data.chunks_ingested ?? "?"} chunks indexed`); // key is chunks_ingested, not chunk_count
   } catch (e) {
     console.warn("[demo mode] /api/upload/pdf unavailable, simulating indexing locally:", e.message);
     setTimeout(() => markDocIndexed(card, "Indexed (demo — not yet sent to backend)"), 1200);
@@ -352,11 +383,11 @@ document.getElementById("docqa-chat-send").addEventListener("click", async () =>
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, session_id: sessionId, scope: "documents_only" })
+      body: JSON.stringify({ query: text, session_id: sessionId, scope: "documents_only" })
     });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
-    appendAiBubble("docqa-chat-thread", data.response || JSON.stringify(data));
+    appendAiBubble("docqa-chat-thread", data.answer || JSON.stringify(data));
   } catch (e) {
     console.warn("[demo mode] /api/chat unavailable:", e.message);
     appendAiBubble("docqa-chat-thread", "(Demo mode — upload a PDF and connect the backend to get real, cited answers here.)");
@@ -390,6 +421,7 @@ function handleImageUpload(file) {
 async function uploadImage(file) {
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("session_id", sessionId); // required Form(...) field on Vanshi's endpoint — was missing, would 422
   try {
     const res = await fetch(`${API_BASE}/api/upload/image`, { method: "POST", body: formData });
     if (!res.ok) throw new Error(String(res.status));
@@ -433,11 +465,11 @@ document.getElementById("image-chat-send").addEventListener("click", async () =>
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, session_id: sessionId, cross_reference_documents: crossReference })
+      body: JSON.stringify({ query: text, session_id: sessionId, cross_reference_documents: crossReference })
     });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
-    appendAiBubble("image-chat-thread", data.response || JSON.stringify(data));
+    appendAiBubble("image-chat-thread", data.answer || JSON.stringify(data));
   } catch (e) {
     console.warn("[demo mode] /api/chat unavailable:", e.message);
     appendAiBubble("image-chat-thread", "(Demo mode — the real vision + cross-reference answer will render here once the backend is connected.)");
@@ -450,9 +482,13 @@ document.getElementById("image-chat-send").addEventListener("click", async () =>
 // live trace (Section 16) — we simply leave the static demo trace markup
 // already in the page (clearly a mockup, per the Demo Mode badge) alone.
 // ---------------------------------------------------------------------------
-function connectTraceStream(onEvent) {
+function connectTraceStream(query, onEvent) {
   try {
-    const es = new EventSource(`${API_BASE}/api/stream/${sessionId}`);
+    // Vanshi's endpoint requires session_id in the path AND query as a
+    // required query string param (confirmed directly against her main.py) —
+    // omitting it 422s.
+    const url = `${API_BASE}/api/stream/${sessionId}?query=${encodeURIComponent(query)}`;
+    const es = new EventSource(url);
     es.onmessage = (event) => {
       try {
         onEvent(JSON.parse(event.data));
@@ -470,5 +506,53 @@ function connectTraceStream(onEvent) {
     return null;
   }
 }
-// Wired up but inert until Vanshi's /api/stream/{session_id} exists.
+
+// Builds the same "REASONING TRACE (N STEPS)" accordion used in the static
+// Chat Mode mockup, but drives it from real connectTraceStream() events
+// instead of hardcoded copy. Per Section 16, if the stream never connects
+// this accordion simply never appears — it does not fall back to a fake
+// trace.
+function beginLiveTrace(threadId, query) {
+  const thread = document.getElementById(threadId);
+  const wrapper = document.createElement("div");
+  wrapper.className = "flex flex-col items-start gap-sm max-w-[95%] mb-sm";
+  wrapper.innerHTML = `
+    <div class="trace-container">
+      <button class="flex items-center gap-sm text-[12px] trace-label hover:opacity-100 transition-colors" onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('.arrow').classList.toggle('rotate-180')">
+        <span class="font-code-inline font-medium" data-trace-count>REASONING TRACE (0 STEPS)</span>
+        <span class="material-symbols-outlined text-[16px] arrow transition-transform">expand_more</span>
+      </button>
+      <div class="hidden flex flex-col gap-sm py-xs mt-xs" data-trace-steps></div>
+    </div>`;
+  thread.appendChild(wrapper);
+
+  const stepsEl = wrapper.querySelector("[data-trace-steps]");
+  const countEl = wrapper.querySelector("[data-trace-count]");
+  let stepCount = 0;
+
+  function addStep(text) {
+    stepCount += 1;
+    countEl.textContent = `REASONING TRACE (${stepCount} STEP${stepCount === 1 ? "" : "S"})`;
+    const row = document.createElement("div");
+    row.className = "flex items-start gap-sm";
+    row.innerHTML = `
+      <div class="w-1.5 h-1.5 rounded-full trace-node-dot mt-1.5"></div>
+      <p class="text-body-md text-on-surface-variant">${escapeHtml(text)}</p>`;
+    stepsEl.appendChild(row);
+  }
+
+  const es = connectTraceStream(query, (traceEvent) => {
+    if (traceEvent.type === "tool_call") {
+      addStep(`Calling ${traceEvent.tool}…`);
+    } else if (traceEvent.type === "tool_result") {
+      addStep(`${traceEvent.tool} returned results.`);
+    } else if (traceEvent.type === "ai_message" && traceEvent.content) {
+      addStep(traceEvent.content);
+    } else if (traceEvent.type === "done" && es) {
+      es.close();
+    }
+  });
+
+  return wrapper;
+}
 // connectTraceStream((traceEvent) => { /* render real tool-call events here */ });
