@@ -12,3 +12,4 @@ pdfplumber
 duckduckgo-search
 groq
 python-multipart
+langchain-text-splitters
