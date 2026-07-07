@@ -263,20 +263,23 @@ document.getElementById("hybrid-chat-send").addEventListener("click", async () =
   }
 
   appendUserBubble("chat-thread", text);
-  const traceEl = beginLiveTrace("chat-thread", text);
-  try {
-    const res = await fetch(`${API_BASE}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: text, session_id: sessionId })
-    });
-    if (!res.ok) throw new Error(String(res.status));
-    const data = await res.json();
-    appendAiBubble("chat-thread", data.answer || JSON.stringify(data));
-  } catch (e) {
-    console.warn("[demo mode] /api/chat unavailable:", e.message);
-    appendAiBubble("chat-thread", "(Demo mode — backend not connected yet. This is where the agent's real synthesized answer will appear.)");
-  }
+
+  // Single source of truth for Chat Mode: the SSE trace stream now drives
+  // BOTH the reasoning trace UI and the final answer bubble. We no longer
+  // also fire a second POST /api/chat here — that was triggering two full,
+  // independent agent runs per message (2x Groq calls, 2x tool calls:
+  // web search, vision, doc search), and since tool results like web
+  // search are non-deterministic, the reasoning trace shown and the final
+  // answer shown could in principle come from two different runs. The
+  // last `ai_message` event received before `done` is used as the answer.
+  beginLiveTrace("chat-thread", text, (finalAnswer, connected) => {
+    if (!connected) {
+      console.warn("[demo mode] trace stream unavailable — no live SSE connection.");
+      appendAiBubble("chat-thread", "(Demo mode — backend not connected yet. This is where the agent's real synthesized answer will appear.)");
+      return;
+    }
+    appendAiBubble("chat-thread", finalAnswer || "(The agent stream ended without a final message.)");
+  });
 });
 
 function appendUserBubble(containerId, text) {
@@ -482,14 +485,16 @@ document.getElementById("image-chat-send").addEventListener("click", async () =>
 // live trace (Section 16) — we simply leave the static demo trace markup
 // already in the page (clearly a mockup, per the Demo Mode badge) alone.
 // ---------------------------------------------------------------------------
-function connectTraceStream(query, onEvent) {
+function connectTraceStream(query, onEvent, onError) {
   try {
     // Vanshi's endpoint requires session_id in the path AND query as a
     // required query string param (confirmed directly against her main.py) —
     // omitting it 422s.
     const url = `${API_BASE}/api/stream/${sessionId}?query=${encodeURIComponent(query)}`;
     const es = new EventSource(url);
+    let gotAnyMessage = false;
     es.onmessage = (event) => {
+      gotAnyMessage = true;
       try {
         onEvent(JSON.parse(event.data));
       } catch (err) {
@@ -499,10 +504,16 @@ function connectTraceStream(query, onEvent) {
     es.onerror = () => {
       console.warn("[demo mode] trace stream unavailable — no live SSE connection.");
       es.close();
+      // Only treat this as a connection failure (and trigger the demo-mode
+      // fallback) if we never received a single event. If the stream had
+      // already delivered events and then errored/closed normally, the
+      // 'done' handler in beginLiveTrace already resolved the answer.
+      if (!gotAnyMessage && onError) onError();
     };
     return es;
   } catch (e) {
     console.warn("[demo mode] EventSource not available:", e.message);
+    if (onError) onError();
     return null;
   }
 }
@@ -512,7 +523,11 @@ function connectTraceStream(query, onEvent) {
 // instead of hardcoded copy. Per Section 16, if the stream never connects
 // this accordion simply never appears — it does not fall back to a fake
 // trace.
-function beginLiveTrace(threadId, query) {
+// onFinalAnswer(answerText, connected) is called exactly once, either when
+// the stream sends 'done' (connected=true, answerText = last ai_message
+// content seen) or when the stream never connects at all (connected=false,
+// so the caller can show the demo-mode fallback bubble instead).
+function beginLiveTrace(threadId, query, onFinalAnswer) {
   const thread = document.getElementById(threadId);
   const wrapper = document.createElement("div");
   wrapper.className = "flex flex-col items-start gap-sm max-w-[95%] mb-sm";
@@ -529,6 +544,8 @@ function beginLiveTrace(threadId, query) {
   const stepsEl = wrapper.querySelector("[data-trace-steps]");
   const countEl = wrapper.querySelector("[data-trace-count]");
   let stepCount = 0;
+  let lastAiMessage = null;
+  let resolved = false;
 
   function addStep(text) {
     stepCount += 1;
@@ -541,17 +558,33 @@ function beginLiveTrace(threadId, query) {
     stepsEl.appendChild(row);
   }
 
-  const es = connectTraceStream(query, (traceEvent) => {
-    if (traceEvent.type === "tool_call") {
-      addStep(`Calling ${traceEvent.tool}…`);
-    } else if (traceEvent.type === "tool_result") {
-      addStep(`${traceEvent.tool} returned results.`);
-    } else if (traceEvent.type === "ai_message" && traceEvent.content) {
-      addStep(traceEvent.content);
-    } else if (traceEvent.type === "done" && es) {
-      es.close();
-    }
-  });
+  function resolveOnce(answer, connected) {
+    if (resolved) return;
+    resolved = true;
+    if (onFinalAnswer) onFinalAnswer(answer, connected);
+  }
+
+  const es = connectTraceStream(
+    query,
+    (traceEvent) => {
+      if (traceEvent.type === "tool_call") {
+        addStep(`Calling ${traceEvent.tool}…`);
+      } else if (traceEvent.type === "tool_result") {
+        addStep(`${traceEvent.tool} returned results.`);
+      } else if (traceEvent.type === "ai_message" && traceEvent.content) {
+        addStep(traceEvent.content);
+        // Track the latest ai_message content as the running candidate for
+        // the final synthesized answer — the last one seen before 'done'
+        // wins, since intermediate ai_message events can be interim
+        // reasoning rather than the final response.
+        lastAiMessage = traceEvent.content;
+      } else if (traceEvent.type === "done") {
+        if (es) es.close();
+        resolveOnce(lastAiMessage, true);
+      }
+    },
+    () => resolveOnce(null, false) // connection never established
+  );
 
   return wrapper;
 }
