@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Multimodal Q&A Pro</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;450;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+<link href="styles.css" rel="stylesheet">
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          "on-primary": "#1f00a4", "error-container": "#93000a", "tertiary": "#6bd8cb",
+          "tertiary-fixed": "#89f5e7", "outline-variant": "#464554", "on-surface-variant": "#c7c4d7",
+          "on-error": "#690005", "on-tertiary-container": "#69d6c9", "surface-container-low": "#1b1b23",
+          "surface-dim": "#13121b", "primary-container": "#4338ca", "surface-container-lowest": "#0e0d15",
+          "on-error-container": "#ffdad6", "inverse-on-surface": "#302f39", "inverse-surface": "#e4e1ed",
+          "secondary-fixed": "#dbe1ff", "error": "#ffb4ab", "inverse-primary": "#5148d7",
+          "surface-bright": "#393842", "on-secondary": "#002a78", "surface-container-high": "#2a2932",
+          "surface-container": "#1f1f27", "primary": "#c3c0ff", "on-background": "#e4e1ed",
+          "on-secondary-container": "#cdd7ff", "tertiary-container": "#005c54", "surface": "#13121b",
+          "secondary-fixed-dim": "#b4c5ff", "secondary-container": "#0053db", "on-surface": "#e4e1ed",
+          "secondary": "#b4c5ff", "on-primary-container": "#c1beff", "surface-variant": "#35343d",
+          "surface-container-highest": "#35343d", "background": "#13121b", "outline": "#918fa0",
+          /* Pillar / accent tokens — master PRD Section 15 */
+          "cobalt": "#2563EB",  /* Documents */
+          "teal": "#0D9488",    /* Live Web */
+          "coral": "#F97066",   /* Vision */
+          "amber": "#F59E0B",   /* Conflict/alert */
+          "cyan": "#22D3EE"     /* Reasoning trace */
+        },
+        borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" },
+        spacing: { base: "4px", xs: "8px", sm: "12px", md: "20px", lg: "32px", xl: "48px", gutter: "16px" },
+        fontFamily: {
+          "headline-lg": ["Space Grotesk"], display: ["Space Grotesk"], "headline-md": ["Space Grotesk"],
+          "body-md": ["Inter"], "body-lg": ["Inter"], "label-caps": ["Inter"], "code-inline": ["JetBrains Mono"]
+        },
+        fontSize: {
+          "headline-lg": ["32px", { lineHeight: "1.2", fontWeight: "600" }],
+          "headline-md": ["20px", { lineHeight: "1.4", fontWeight: "500" }],
+          "body-lg": ["16px", { lineHeight: "1.6", fontWeight: "400" }],
+          "body-md": ["14px", { lineHeight: "1.5", fontWeight: "400" }],
+          "label-caps": ["11px", { lineHeight: "1", letterSpacing: "0.05em", fontWeight: "600" }],
+          "code-inline": ["13px", { lineHeight: "1.4", fontWeight: "450" }]
+        }
+      }
+    }
+  };
+</script>
+</head>
+<body class="flex flex-col h-screen overflow-hidden font-body-md text-body-md bg-background text-on-surface">
+
+<!-- ============================== TOP NAV (shared across all 3 tabs) ============================== -->
+<header class="bg-surface-dim border-b border-outline-variant flex justify-between items-center w-full px-md md:px-xl h-16 z-50 shrink-0">
+  <div class="flex items-center gap-lg">
+    <span class="text-headline-md font-headline-md font-bold text-primary">Multimodal Q&amp;A Pro</span>
+    <nav class="hidden md:flex items-center gap-md h-16">
+      <button class="nav-tab-link text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps h-full flex items-center px-xs border-b-2 border-transparent" data-tab-target="hybrid-chat">Hybrid Chat</button>
+      <button class="nav-tab-link text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps h-full flex items-center px-xs border-b-2 border-transparent" data-tab-target="document-qa">Document Q&amp;A</button>
+      <button class="nav-tab-link text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps h-full flex items-center px-xs border-b-2 border-transparent" data-tab-target="image-studio">Image Studio</button>
+    </nav>
+  </div>
+  <div class="flex items-center gap-md">
+    <span class="demo-mode-badge" id="demo-mode-badge" title="No live backend reachable yet — showing placeholder content, not a real agent.stream() trace">
+      <span class="material-symbols-outlined text-[14px]">info</span> Demo Mode
+    </span>
+    <button class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors" title="Notifications">notifications</button>
+    <button class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors" title="Settings">settings</button>
+    <div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center border border-outline-variant overflow-hidden">
+      <span class="material-symbols-outlined text-[18px] text-on-primary-container">person</span>
+    </div>
+  </div>
+</header>
+
+<div class="flex flex-1 overflow-hidden">
+
+  <!-- ============================== SIDEBAR (shared across all 3 tabs) ============================== -->
+  <aside class="hidden md:flex flex-col h-full w-64 bg-surface-container-low border-r border-outline-variant p-md shrink-0">
+    <div class="mb-lg px-xs">
+      <div class="flex items-center gap-sm mb-xs">
+        <div class="w-10 h-10 rounded-xl bg-primary-container flex items-center justify-center">
+          <span class="material-symbols-outlined text-on-primary-container">auto_awesome</span>
+        </div>
+        <div>
+          <p class="font-headline-md text-[14px] font-bold text-on-surface leading-tight">Project Alpha</p>
+          <p class="font-label-caps text-label-caps text-on-surface-variant">Active Research</p>
+        </div>
+      </div>
+      <button class="w-full mt-md py-sm bg-primary-container text-on-primary-container rounded-xl font-label-caps text-label-caps flex items-center justify-center gap-xs hover:opacity-90 transition-all">
+        <span class="material-symbols-outlined text-[16px]">add</span> New Analysis
+      </button>
+    </div>
+    <nav class="flex-1 flex flex-col gap-xs overflow-y-auto custom-scrollbar">
+      <a class="flex items-center gap-sm px-md py-sm bg-primary-container text-on-primary-container rounded-xl font-label-caps text-label-caps transition-all" href="#">
+        <span class="material-symbols-outlined text-[18px]">folder_open</span> Sources
+      </a>
+      <a class="flex items-center gap-sm px-md py-sm text-on-surface-variant hover:bg-surface-variant hover:text-on-surface rounded-xl font-label-caps text-label-caps transition-all" href="#">
+        <span class="material-symbols-outlined text-[18px]">history</span> History
+      </a>
+      <a class="flex items-center gap-sm px-md py-sm text-on-surface-variant hover:bg-surface-variant hover:text-on-surface rounded-xl font-label-caps text-label-caps transition-all" href="#">
+        <span class="material-symbols-outlined text-[18px]">library_books</span> Collections
+      </a>
+      <a class="flex items-center gap-sm px-md py-sm text-on-surface-variant hover:bg-surface-variant hover:text-on-surface rounded-xl font-label-caps text-label-caps transition-all" href="#">
+        <span class="material-symbols-outlined text-[18px]">delete</span> Trash
+      </a>
+    </nav>
+    <div class="mt-auto border-t border-outline-variant pt-md space-y-base">
+      <a class="flex items-center gap-sm px-md py-sm text-on-surface-variant hover:bg-surface-variant hover:text-on-surface rounded-xl font-label-caps text-label-caps transition-all" href="#">
+        <span class="material-symbols-outlined text-[18px]">help</span> Help
+      </a>
+      <a class="flex items-center gap-sm px-md py-sm text-on-surface-variant hover:bg-surface-variant hover:text-on-surface rounded-xl font-label-caps text-label-caps transition-all" href="#">
+        <span class="material-symbols-outlined text-[18px]">archive</span> Archive
+      </a>
+    </div>
+  </aside>
+
+  <!-- ============================== MAIN CONTENT ============================== -->
+  <main class="flex-1 flex overflow-hidden relative">
+
+    <!-- ============================== TAB 1: HYBRID CHAT ============================== -->
+    <section id="tab-hybrid-chat" class="tab-panel active flex-1 flex flex-col overflow-hidden">
+      <div class="h-14 border-b border-outline-variant px-lg flex items-center justify-between bg-surface-container-low/50 shrink-0">
+        <div class="flex items-center gap-sm">
+          <div class="w-2 h-2 rounded-full bg-cobalt animate-pulse"></div>
+          <h2 class="font-headline-md text-[16px] text-on-surface">Hybrid Chat</h2>
+        </div>
+        <!-- Chat Mode / Report Mode toggle -->
+        <div class="flex items-center bg-surface-container rounded-full p-[3px] border border-outline-variant">
+          <button id="mode-chat-btn" class="mode-toggle-btn px-md py-1 rounded-full font-label-caps text-label-caps transition-all bg-primary-container text-on-primary-container">Chat Mode</button>
+          <button id="mode-report-btn" class="mode-toggle-btn px-md py-1 rounded-full font-label-caps text-label-caps transition-all text-on-surface-variant">Report Mode</button>
+        </div>
+      </div>
+
+      <!-- ---- CHAT MODE VIEW ---- -->
+      <div id="chat-mode-view" class="flex-1 flex flex-col overflow-hidden relative">
+        <div id="chat-thread" class="flex-1 overflow-y-auto p-lg space-y-lg custom-scrollbar pb-40">
+          <div class="flex flex-col items-end gap-xs max-w-[85%] ml-auto">
+            <div class="bg-primary text-on-primary p-md rounded-2xl rounded-tr-none shadow-lg">
+              <p class="text-body-md">Analyze the correlation between current EV infrastructure growth and local power grid capacities in Western Europe. Use the latest technical whitepapers from my sources.</p>
+            </div>
+            <p class="font-label-caps text-[10px] text-on-surface-variant">Sent 2m ago</p>
+          </div>
+
+          <div class="flex flex-col items-start gap-sm max-w-[95%]">
+            <!-- Reasoning trace accordion — Electric Cyan container, per Section 15 -->
+            <div class="trace-container">
+              <button class="flex items-center gap-sm text-[12px] trace-label hover:opacity-100 transition-colors" onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('.arrow').classList.toggle('rotate-180')">
+                <span class="font-code-inline font-medium">REASONING TRACE (3 STEPS)</span>
+                <span class="material-symbols-outlined text-[16px] arrow transition-transform">expand_more</span>
+              </button>
+              <div class="hidden flex flex-col gap-sm py-xs mt-xs">
+                <div class="flex items-start gap-sm">
+                  <div class="w-1.5 h-1.5 rounded-full trace-node-dot mt-1.5"></div>
+                  <p class="text-body-md text-on-surface-variant">Scanning document corpus — found 14 relevant whitepapers (2023–2024).</p>
+                </div>
+                <div class="flex items-start gap-sm">
+                  <div class="w-1.5 h-1.5 rounded-full trace-node-dot mt-1.5"></div>
+                  <p class="text-body-md text-on-surface-variant">Synthesizing data: infrastructure vs. grid-capacity deltas in Germany, France, and the UK.</p>
+                </div>
+                <div class="flex items-start gap-sm">
+                  <div class="w-1.5 h-1.5 rounded-full trace-node-dot mt-1.5"></div>
+                  <p class="text-body-md text-on-surface-variant">Cross-referencing citations against the Documents pillar. <em>search_web was not invoked — query was answerable from uploaded documents alone.</em></p>
+                </div>
+              </div>
+            </div>
+
+            <div class="bg-surface-container rounded-2xl rounded-tl-none p-gutter border border-outline-variant/30 shadow-xl">
+              <div class="flex justify-end mb-xs">
+                <div class="px-sm py-1 bg-teal/10 border border-teal/30 rounded-full flex items-center gap-xs">
+                  <div class="w-2 h-2 rounded-full bg-teal"></div>
+                  <span class="text-[10px] text-teal font-label-caps">98% CONFIDENCE</span>
+                </div>
+              </div>
+              <div class="space-y-md">
+                <p class="text-body-lg leading-relaxed text-on-surface">Western Europe is facing a critical synchronization gap between EV adoption and grid readiness.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+                  <div class="bg-surface-container-high p-sm rounded-xl border border-outline-variant/20">
+                    <h4 class="font-label-caps text-label-caps text-on-surface-variant mb-xs">INFRASTRUCTURE STATUS</h4>
+                    <p class="text-body-md text-on-surface-variant">Public charging stations increased 38% YoY, concentrated in urban hubs.</p>
+                  </div>
+                  <div class="bg-surface-container-high p-sm rounded-xl border border-cobalt/30">
+                    <h4 class="font-label-caps text-label-caps text-cobalt mb-xs">GRID CAPACITY DELTA</h4>
+                    <p class="text-body-md text-on-surface-variant">Transformer saturation in residential zones projected to hit 85% by 2026 without upgrades.</p>
+                  </div>
+                </div>
+                <div class="flex flex-wrap gap-xs pt-sm border-t border-outline-variant/20">
+                  <span class="text-on-surface-variant text-[11px] font-label-caps mr-xs uppercase">Sources:</span>
+                  <div class="px-sm py-0.5 rounded-full pill-document text-[10px] flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[12px]">description</span> Document: GridReport_2024.pdf, p.4
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="absolute bottom-0 left-0 right-0 p-lg bg-gradient-to-t from-background via-background/95 to-transparent pt-xl">
+          <div class="max-w-4xl mx-auto">
+            <div class="relative group">
+              <textarea id="hybrid-chat-input" class="w-full bg-surface-container-highest border border-outline-variant rounded-xl p-md pr-32 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all resize-none min-h-[60px] text-on-surface placeholder-on-surface-variant" placeholder="Message Multimodal Q&A Pro..." rows="1"></textarea>
+              <div class="absolute right-md bottom-md flex items-center gap-sm">
+                <button class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors" title="Attach file">attach_file</button>
+                <button id="hybrid-chat-send" class="bg-primary text-on-primary w-10 h-10 rounded-lg flex items-center justify-center hover:shadow-lg active:scale-95 transition-all">
+                  <span class="material-symbols-outlined">send</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- REPORT MODE VIEW ---- -->
+      <div id="report-mode-view" class="hidden flex-1 overflow-y-auto p-md md:p-xl custom-scrollbar">
+        <div class="max-w-6xl mx-auto space-y-lg">
+          <div class="flex flex-col md:flex-row md:items-end justify-between gap-md border-b border-outline-variant pb-lg">
+            <div class="space-y-xs">
+              <div class="flex items-center gap-sm">
+                <span class="bg-primary/20 text-primary px-sm py-xs rounded-full font-label-caps text-label-caps uppercase border border-primary/30">Report Mode</span>
+                <span id="report-conflict-badge" class="hidden items-center gap-xs text-amber font-label-caps text-label-caps uppercase">
+                  <span class="material-symbols-outlined text-[16px]">warning</span> Conflict Detected
+                </span>
+              </div>
+              <h1 id="report-title" class="font-headline-lg text-headline-lg text-on-surface">Investigation Report</h1>
+              <p id="report-subtitle" class="text-on-surface-variant max-w-2xl text-body-lg">&nbsp;</p>
+            </div>
+            <div class="flex gap-sm">
+              <label class="flex items-center gap-xs text-on-surface-variant text-label-caps font-label-caps mr-md">
+                <input type="checkbox" id="report-demo-toggle" class="rounded"> Show conflict example
+              </label>
+              <button class="px-md py-sm bg-surface-container border border-outline-variant rounded-xl font-label-caps text-label-caps uppercase hover:bg-surface-container-high transition-all">Export PDF</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
+            <div class="lg:col-span-8 space-y-gutter">
+              <div class="glass-panel rounded-xl p-gutter lg:p-lg space-y-lg">
+                <section>
+                  <h2 class="font-headline-md text-headline-md text-primary mb-sm flex items-center gap-sm">
+                    <span class="material-symbols-outlined">description</span> Findings
+                  </h2>
+                  <div id="report-findings" class="space-y-md"></div>
+                </section>
+
+                <section id="report-conflicts-section" class="hidden bg-amber/5 border border-amber/30 rounded-xl p-gutter conflict-glow">
+                  <div class="flex items-center justify-between mb-gutter">
+                    <div class="flex items-center gap-sm text-amber">
+                      <span class="material-symbols-outlined">rule</span>
+                      <h3 class="font-label-caps text-label-caps uppercase tracking-widest font-bold">Conflict Comparison</h3>
+                    </div>
+                    <span class="bg-amber text-background text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">High Priority</span>
+                  </div>
+                  <div id="report-conflicts" class="space-y-md"></div>
+                </section>
+
+                <section>
+                  <h2 class="font-headline-md text-headline-md text-on-surface mb-sm">Conclusion</h2>
+                  <p id="report-conclusion" class="text-body-md text-on-surface-variant leading-relaxed">&nbsp;</p>
+                </section>
+              </div>
+            </div>
+
+            <!-- Reasoning trace column — Electric Cyan, same token as Chat Mode -->
+            <div class="lg:col-span-4">
+              <div class="bg-surface-container-low border border-outline-variant/30 rounded-xl p-gutter h-full">
+                <h3 class="font-label-caps text-label-caps uppercase text-cyan tracking-widest mb-lg flex items-center gap-sm">
+                  <span class="material-symbols-outlined text-[18px]">hub</span> Reasoning Trace
+                </h3>
+                <div id="report-trace-steps" class="space-y-lg relative"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================== TAB 2: DOCUMENT Q&A ============================== -->
+    <section id="tab-document-qa" class="tab-panel flex-1 overflow-hidden">
+      <!-- Left column: upload + document list -->
+      <div class="w-full md:w-[30%] border-r border-outline-variant flex flex-col bg-surface-container-lowest">
+        <div class="p-lg">
+          <div id="pdf-dropzone" class="dropzone rounded-xl p-xl flex flex-col items-center justify-center text-center gap-sm hover:border-cobalt transition-colors cursor-pointer bg-surface-container-low">
+            <span class="material-symbols-outlined text-4xl text-on-surface-variant">upload_file</span>
+            <div>
+              <p class="text-body-lg text-on-surface">Drop PDF here</p>
+              <p class="text-body-md text-on-surface-variant mt-xs">or click to browse from device</p>
+            </div>
+            <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden">
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto px-lg space-y-md scrollbar-hide pb-lg">
+          <p class="font-label-caps text-label-caps text-on-surface-variant mb-sm">
+            MY DOCUMENTS <span id="doc-count-label">(0 files)</span>
+          </p>
+          <div id="doc-empty-state" class="flex flex-col items-center text-center gap-sm py-lg">
+            <span class="material-symbols-outlined text-3xl text-on-surface-variant">description</span>
+            <p class="font-body-lg text-on-surface">No documents yet</p>
+            <p class="text-body-md text-on-surface-variant">Your uploaded PDFs will appear here for indexing.</p>
+          </div>
+          <div id="doc-list" class="space-y-md"></div>
+        </div>
+        <div class="p-lg border-t border-outline-variant">
+          <div class="bg-surface-container-low rounded-xl p-md flex items-center gap-sm">
+            <span class="material-symbols-outlined text-teal text-[18px]">memory</span>
+            <div>
+              <p class="font-label-caps text-label-caps text-on-surface-variant">Engine Status</p>
+              <p class="text-body-md text-teal">● Document Processor Ready</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right column: scoped chat -->
+      <div class="hidden md:flex flex-1 flex-col relative">
+        <div class="h-14 border-b border-outline-variant px-lg flex items-center justify-between bg-cobalt/10 backdrop-blur-md">
+          <div class="flex items-center gap-sm">
+            <span class="material-symbols-outlined text-cobalt text-[18px]">description</span>
+            <h2 class="font-headline-md text-[16px] text-on-surface">Document Analysis</h2>
+            <span class="text-[10px] text-cobalt font-label-caps uppercase border border-cobalt/30 rounded-full px-2 py-0.5">Documents only</span>
+          </div>
+        </div>
+
+        <div id="docqa-ready-state" class="flex-1 flex items-center justify-center p-lg">
+          <div class="max-w-md text-center space-y-md">
+            <span class="material-symbols-outlined text-5xl text-on-surface-variant">forum</span>
+            <h3 class="font-headline-md text-headline-md text-on-surface">Ready for Analysis</h3>
+            <p class="text-on-surface-variant">Upload a PDF to start a focused Q&amp;A session. This mode exclusively searches your uploaded documents.</p>
+            <div class="flex flex-col gap-sm items-center">
+              <span class="flex items-center gap-xs text-teal text-body-md"><span class="material-symbols-outlined text-[16px]">check_circle</span> Zero-hallucination guardrails active</span>
+              <span class="flex items-center gap-xs text-on-surface-variant text-body-md"><span class="material-symbols-outlined text-[16px]">check_circle</span> Automatic source attribution</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="docqa-chat-thread" class="hidden flex-1 overflow-y-auto p-lg space-y-lg custom-scrollbar pb-32"></div>
+
+        <div class="p-lg border-t border-outline-variant bg-surface-container-lowest">
+          <div class="relative max-w-4xl mx-auto">
+            <textarea id="docqa-chat-input" class="w-full bg-surface-container-highest border border-outline-variant rounded-xl p-md pr-16 focus:ring-2 focus:ring-cobalt/20 focus:border-cobalt outline-none transition-all resize-none min-h-[56px]" placeholder="Ask a question about your documents..." rows="1"></textarea>
+            <button id="docqa-chat-send" class="absolute right-md bottom-md bg-cobalt text-white w-9 h-9 rounded-lg flex items-center justify-center hover:opacity-90 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-[20px]">send</span>
+            </button>
+          </div>
+          <p class="text-center text-[10px] text-on-surface-variant mt-sm" id="docqa-indexing-status">INDEXING: INACTIVE</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================== TAB 3: IMAGE STUDIO ============================== -->
+    <section id="tab-image-studio" class="tab-panel flex-1 overflow-hidden">
+      <div class="flex-1 p-lg flex flex-col gap-lg overflow-y-auto custom-scrollbar">
+        <div class="flex items-center justify-between">
+          <h2 class="font-headline-md text-headline-md text-on-surface flex items-center gap-sm">
+            <span class="material-symbols-outlined text-coral">camera</span> Image Studio
+          </h2>
+        </div>
+
+        <div id="image-empty-state" class="dropzone dropzone-vision rounded-xl flex-1 min-h-[380px] flex flex-col items-center justify-center gap-sm cursor-pointer" style="border-color:#F97066;">
+          <span class="material-symbols-outlined text-5xl text-coral">image_search</span>
+          <p class="text-body-lg text-on-surface">Drop image here or click to upload</p>
+          <p class="text-body-md text-on-surface-variant">PNG, JPG supported</p>
+          <input type="file" id="image-file-input" accept="image/*" class="hidden">
+        </div>
+
+        <div id="image-populated-state" class="hidden flex-1 flex-col gap-lg">
+          <div class="glass-panel rounded-xl flex-1 min-h-[300px] flex items-center justify-center overflow-hidden border border-outline-variant relative">
+            <div class="absolute top-md left-md">
+              <div class="bg-coral/10 border border-coral/40 text-coral px-sm py-xs rounded-lg flex items-center gap-xs">
+                <span class="material-symbols-outlined text-[16px]">visibility</span>
+                <span class="text-label-caps">Analyzing image</span>
+              </div>
+            </div>
+            <img id="image-preview" class="max-w-[90%] max-h-[90%] object-contain" src="" alt="Uploaded image preview">
+          </div>
+        </div>
+      </div>
+
+      <!-- Analysis chat -->
+      <div class="hidden lg:flex w-[420px] bg-surface-container border-l border-outline-variant flex-col shrink-0">
+        <div class="p-md border-b border-outline-variant flex items-center justify-between bg-surface-container-high/50">
+          <div class="flex items-center gap-sm">
+            <span class="material-symbols-outlined text-primary">forum</span>
+            <span class="font-headline-md text-body-lg">Analysis Chat</span>
+          </div>
+          <label class="flex items-center gap-xs cursor-pointer">
+            <input type="checkbox" id="cross-reference-toggle" checked class="rounded">
+            <span class="text-label-caps text-on-surface-variant">Cross-reference docs</span>
+          </label>
+        </div>
+        <div id="image-chat-thread" class="flex-1 overflow-y-auto p-md space-y-lg custom-scrollbar">
+          <p class="text-center text-on-surface-variant text-body-md py-lg">Upload an image to start asking questions.</p>
+        </div>
+        <div class="p-md border-t border-outline-variant bg-surface-container-lowest">
+          <div class="relative">
+            <textarea id="image-chat-input" class="w-full bg-surface-dim border border-outline-variant rounded-xl p-md pr-16 resize-none outline-none focus:ring-2 focus:ring-coral/20 focus:border-coral" placeholder="Ask about the image..." rows="2"></textarea>
+            <button id="image-chat-send" class="absolute bottom-md right-md bg-coral text-white w-9 h-9 rounded-lg flex items-center justify-center hover:opacity-90 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-[20px]">send</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

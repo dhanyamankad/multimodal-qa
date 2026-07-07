@@ -1,0 +1,137 @@
+/* ==========================================================================
+   Multimodal Q&A Pro — static/styles.css
+   Design tokens per master PRD Section 15. Merged from three Stitch exports
+   (Hybrid Chat, Document Q&A, Image Studio) into one shared stylesheet.
+   ========================================================================== */
+
+:root {
+  --pillar-documents: #2563EB; /* cobalt */
+  --pillar-web: #0D9488;       /* teal */
+  --pillar-vision: #F97066;    /* coral */
+  --accent-conflict: #F59E0B;  /* amber — conflict-flag moments only */
+  --accent-trace: #22D3EE;     /* electric cyan — reasoning-trace UI only */
+  --brand-ink: #4338CA;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background-color: #13121b;
+  color: #e4e1ed;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* ---- shared surfaces ---- */
+.glass-panel {
+  background: rgba(31, 31, 39, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(145, 143, 160, 0.15);
+}
+
+.custom-scrollbar::-webkit-scrollbar,
+.scrollbar-hide::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track,
+.scrollbar-hide::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb,
+.scrollbar-hide::-webkit-scrollbar-thumb { background: #464554; border-radius: 10px; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ---- reasoning trace (Electric Cyan, reserved token — Section 15) ----
+   Every tab's trace container uses this. Tool icons/dots inside keep their
+   own pillar color (coral / cobalt / teal); only the shared wrapper,
+   connecting line, and "REASONING TRACE" label use cyan. */
+.trace-container {
+  border-left: 2px solid var(--accent-trace);
+  padding-left: 16px;
+}
+.trace-label {
+  color: var(--accent-trace);
+  opacity: 0.9;
+}
+.trace-line {
+  width: 1px;
+  background: linear-gradient(to bottom, var(--accent-trace) 0%, rgba(34, 211, 238, 0) 100%);
+}
+.trace-node-dot {
+  background: var(--accent-trace);
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.15);
+}
+.pulse-cyan {
+  box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4);
+  animation: pulse-cyan 2s infinite;
+}
+@keyframes pulse-cyan {
+  0%   { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.7); }
+  70%  { transform: scale(1);    box-shadow: 0 0 0 6px rgba(34, 211, 238, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+}
+
+/* ---- conflict / alert (Amber, reserved token — Section 15) ---- */
+.conflict-glow {
+  box-shadow: 0 0 24px -6px rgba(245, 158, 11, 0.25);
+}
+
+/* ---- upload progress shimmer ---- */
+.progress-shimmer {
+  background: linear-gradient(90deg, rgba(195,192,255,0) 0%, rgba(195,192,255,0.4) 50%, rgba(195,192,255,0) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite linear;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ---- source citation pills, tinted per pillar ---- */
+.pill-document {
+  background: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  color: var(--pillar-documents);
+}
+.pill-web {
+  background: rgba(13, 148, 136, 0.1);
+  border: 1px solid rgba(13, 148, 136, 0.3);
+  color: var(--pillar-web);
+}
+.pill-vision {
+  background: rgba(249, 112, 102, 0.1);
+  border: 1px solid rgba(249, 112, 102, 0.3);
+  color: var(--pillar-vision);
+}
+
+/* ---- tab panels ---- */
+.tab-panel { display: none; }
+.tab-panel.active { display: flex; }
+
+/* ---- demo-mode badge: shown only while the UI is running against mock
+   data because no live backend is reachable yet. Never silently pretend
+   placeholder content is a real agent.stream() trace (PRD Section 16). ---- */
+.demo-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #918fa0;
+  border: 1px dashed #464554;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* ---- misc ---- */
+.dropzone {
+  border: 2px dashed #464554;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.dropzone.drag-over {
+  border-color: var(--pillar-documents);
+  background-color: rgba(37, 99, 235, 0.06);
+}
+.dropzone.drag-over-vision {
+  border-color: var(--pillar-vision);
+  background-color: rgba(249, 112, 102, 0.06);
+}

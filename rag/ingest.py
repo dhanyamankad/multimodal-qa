@@ -23,7 +23,7 @@ from typing import List, Optional
 
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 import chromadb
 from chromadb.config import Settings
 
