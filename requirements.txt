@@ -13,10 +13,5 @@ pypdf
 pdfplumber
 ddgs
 groq
-<<<<<<< HEAD
 python-multipart
-langchain-text-splitters
-langchain-huggingface
-=======
-python-multipart
->>>>>>> vanshi
+
