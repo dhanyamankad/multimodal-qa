@@ -9,7 +9,7 @@ chromadb
 sentence-transformers
 pypdf
 pdfplumber
-duckduckgo-search
+ddgs
 groq
 python-multipart
 langchain-text-splitters
