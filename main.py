@@ -39,20 +39,63 @@ _SESSION_IMAGES: dict[str, str] = {}
 class ChatRequest(BaseModel):
     session_id: str
     query: str
+    # Document Q&A tab (Section 3.2): "documents_only" restricts the agent to
+    # search_documents and forbids falling back to search_web, even on
+    # NOT_FOUND_IN_DOCUMENTS. Previously accepted-but-ignored by Pydantic.
+    scope: Optional[str] = None
+    # Image Studio tab: whether the cross-reference toggle is on, i.e.
+    # whether the agent should also check uploaded documents for related
+    # info while answering an image question. Previously accepted-but-ignored.
+    cross_reference_documents: Optional[bool] = None
 
 
 def _build_input_messages(req: ChatRequest) -> list[dict]:
     """If an image was uploaded earlier in this session, prepend that context
     so the routing prompt's rule 1 (image present -> describe_image first)
-    has something concrete to act on."""
+    has something concrete to act on.
+
+    Also translates the frontend's `scope` and `cross_reference_documents`
+    fields into explicit instructions in the message content. The agent's
+    routing rules live in the system prompt in agent/graph.py (Vanshi's
+    module), not here, so this is the interface-level way to influence
+    per-request routing without changing that file: the same pattern already
+    used for the image-path context below.
+    """
     content = req.query
     image_path = _SESSION_IMAGES.get(req.session_id)
+
     if image_path:
         content = (
             f"{req.query}\n\n"
             f"[An image was uploaded in this session at path: {image_path}. "
             f"If relevant to this question, call describe_image with this path.]"
         )
+        if req.cross_reference_documents:
+            content += (
+                "\n\n[Cross-reference mode is ON for this turn: after "
+                "analyzing the image with describe_image, also call "
+                "search_documents to check whether the uploaded documents "
+                "contain related or corroborating information, and call out "
+                "any connection or discrepancy you find between the image "
+                "and the documents in your answer.]"
+            )
+        elif req.cross_reference_documents is False:
+            content += (
+                "\n\n[Cross-reference mode is OFF for this turn: answer using "
+                "only describe_image. Do not call search_documents unless the "
+                "question is clearly unrelated to the uploaded image.]"
+            )
+
+    if req.scope == "documents_only":
+        content += (
+            "\n\n[This question comes from the Document Q&A tab (scope="
+            "documents_only): you must answer using ONLY search_documents. "
+            "Do not call search_web under any circumstances. If "
+            "search_documents returns NOT_FOUND_IN_DOCUMENTS, tell the user "
+            "the answer was not found in the uploaded documents instead of "
+            "falling back to a web search.]"
+        )
+
     return [{"role": "user", "content": content}]
 
 
@@ -138,12 +181,24 @@ def _serialize_event(event: dict) -> str:
 
 
 @app.get("/api/stream/{session_id}")
-async def stream(session_id: str, query: str):
+async def stream(
+    session_id: str,
+    query: str,
+    scope: Optional[str] = None,
+    cross_reference_documents: Optional[bool] = None,
+):
     """SSE stream of the live reasoning trace, driven by the real
     agent.stream() output — not a simulated/fabricated trace."""
 
     def event_generator():
-        messages = _build_input_messages(ChatRequest(session_id=session_id, query=query))
+        messages = _build_input_messages(
+            ChatRequest(
+                session_id=session_id,
+                query=query,
+                scope=scope,
+                cross_reference_documents=cross_reference_documents,
+            )
+        )
         for event in stream_agent(messages):
             serialized = _serialize_event(event)
             if serialized.strip():

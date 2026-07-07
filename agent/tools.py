@@ -33,17 +33,22 @@ except ImportError:  # pragma: no cover - dependency should always be installed 
 # will fail until she fills it in, so we degrade to a clearly-labeled inline
 # placeholder for local dev/testing rather than crashing at import time.
 try:
-    from rag.retrieve import retrieve_chunks  # type: ignore
+    from rag.retrieve import retrieve_chunks, SIMILARITY_THRESHOLD as CHUNK_CONFIDENCE_THRESHOLD  # type: ignore
 except Exception:  # noqa: BLE001
-    def retrieve_chunks(query: str, threshold: float = 0.35):
+    # CHUNK_CONFIDENCE_THRESHOLD fallback below is NOT a guess — it mirrors
+    # Dhanya's calibrated SIMILARITY_THRESHOLD in rag/retrieve.py (0.08,
+    # picked from real testing: genuinely relevant chunks scored ~0.14-0.17,
+    # irrelevant ones scored negative). The old 0.35 here would reject every
+    # real answer even once retrieve.py exists, so this must stay in sync —
+    # only used at all if the import above fails (rag/retrieve.py missing).
+    CHUNK_CONFIDENCE_THRESHOLD = 0.08
+
+    def retrieve_chunks(query: str, threshold: float = CHUNK_CONFIDENCE_THRESHOLD):
         """TEMPORARY PLACEHOLDER — replace by importing Dhanya's real
         rag/retrieve.py once it's implemented. Returns no chunks, which makes
         search_documents correctly report NOT_FOUND so the router falls back
         to search_web, keeping the agent usable end-to-end before RAG lands."""
         return []
-
-
-CHUNK_CONFIDENCE_THRESHOLD = 0.35
 
 # --- Vision models (see PRD 3.0 / Section 5 / Section 14) ------------------
 # Confirmed live against console.groq.com/docs as of this build (2026-07-07):
