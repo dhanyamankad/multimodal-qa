@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from agent.graph import invoke_agent, stream_agent
 from agent.session_context import use_session
-from agent.synthesis import synthesize_chat, synthesize_report
+from agent.synthesis import strip_citation_artifacts, synthesize_chat, synthesize_report
 from rag.ingest import delete_session_documents
 
 app = FastAPI(title="Multimodal Q&A Pro")
@@ -460,7 +460,17 @@ def _serialize_stream_item(mode: str, chunk) -> str:
                         for tc in msg.tool_calls:
                             lines.append({"type": "tool_call", "tool": tc["name"], "args": tc["args"]})
                     if msg.content:
-                        lines.append({"type": "ai_message", "node": node_name, "content": msg.content})
+                        # Sanitize here too: this is the exact string that
+                        # ends up rendered in the trace accordion (and used
+                        # as the frontend's own fallback answer) — see
+                        # static/app.js's ai_message handler.
+                        lines.append(
+                            {
+                                "type": "ai_message",
+                                "node": node_name,
+                                "content": strip_citation_artifacts(msg.content),
+                            }
+                        )
     elif mode == "messages":
         message_chunk, _metadata = chunk
         content = getattr(message_chunk, "content", None)
@@ -563,7 +573,12 @@ async def stream(
                                         # to apply itself — intermediate
                                         # reasoning content can appear
                                         # before the true final answer.
-                                        last_ai_message = msg.content
+                                        # Sanitized here (not just in
+                                        # synthesize_chat) because this value
+                                        # is what actually gets stored into
+                                        # session history and sent as the
+                                        # "done" fallback for this endpoint.
+                                        last_ai_message = strip_citation_artifacts(msg.content)
                         serialized = _serialize_stream_item(mode, chunk)
                         if serialized.strip():
                             q.put(("data", serialized))

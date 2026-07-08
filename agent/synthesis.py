@@ -13,10 +13,34 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_groq import ChatGroq
+
+# Defensive second layer: gpt-oss models are trained on OpenAI's Harmony
+# "browser" tool, which cites with markers like `【search_web†L0-L5】` or
+# `[search_web†L0-L5]`. Our system prompt (agent/graph.py rule 6) tells the
+# model never to emit these, but prompts aren't guaranteed — this strips any
+# that slip through so they never reach the user, regardless of bracket
+# style. Matches "<name>†L<digits>[-L<digits>]" inside [...] or 【...】.
+_CITATION_MARKER_RE = re.compile(
+    r"[\[【][^\[\]【】]*†\s*L\d+(?:-\s*L?\d+)?[\]】]",
+    flags=re.IGNORECASE,
+)
+
+
+def strip_citation_artifacts(text: str) -> str:
+    """Remove Harmony-style browser-tool citation markers (e.g.
+    "[search_web†L0-L5]") from model output. Never touches ordinary text —
+    only the specific `†L<n>-L<n>` marker shape leaks from training, not
+    anything a real synthesized answer would legitimately contain."""
+    if not text:
+        return text
+    cleaned = _CITATION_MARKER_RE.sub("", text)
+    # Collapse any double-spacing left behind by a removed inline marker.
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 REASONING_MODEL = "llama-3.3-70b-versatile"
 
@@ -53,7 +77,7 @@ def synthesize_chat(agent_result: dict[str, Any]) -> str:
     messages = agent_result.get("messages", [])
     for msg in reversed(messages):
         if isinstance(msg, AIMessage) and msg.content:
-            return msg.content
+            return strip_citation_artifacts(msg.content)
     return "I wasn't able to produce an answer for that — please try rephrasing the question."
 
 
