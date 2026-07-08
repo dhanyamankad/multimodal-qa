@@ -79,44 +79,9 @@ function setHybridMode(mode) {
   reportModeBtn.classList.toggle("bg-primary-container", !isChat);
   reportModeBtn.classList.toggle("text-on-primary-container", !isChat);
   reportModeBtn.classList.toggle("text-on-surface-variant", isChat);
-  if (!isChat) renderReport(document.getElementById("report-demo-toggle").checked ? REPORT_WITH_CONFLICT : REPORT_NO_CONFLICT);
 }
 chatModeBtn.addEventListener("click", () => setHybridMode("chat"));
 reportModeBtn.addEventListener("click", () => setHybridMode("report"));
-document.getElementById("report-demo-toggle").addEventListener("change", (e) => renderReport(e.target.checked ? REPORT_WITH_CONFLICT : REPORT_NO_CONFLICT));
-
-// ---- Report Mode data ----
-// Matches the schema in master PRD Section 3.2. These two objects are demo
-// fixtures for local QA of the toggle only (mirrors the two Stitch mockup
-// states: "with conflict" / "no conflicts"). Once Vanshi's POST
-// /api/chat/report is live, fetchReport() below replaces this entirely.
-const REPORT_NO_CONFLICT = {
-  title: "Investigation Report: EV Infrastructure vs. Grid Capacity",
-  subtitle: "Automated audit comparing uploaded technical whitepapers against current grid-capacity data.",
-  findings: [
-    { claim: "Public charging stations increased 38% YoY across Western Europe.", source_type: "document", source_detail: "GridReport_2024.pdf, p.4" },
-    { claim: "Transformer saturation is projected to reach 85% by 2026 without upgrades.", source_type: "document", source_detail: "GridReport_2024.pdf, p.12" }
-  ],
-  conflicts: [],
-  conclusion: "Both sources agree: infrastructure growth is outpacing grid upgrades. No conflicting claims found between documents and web sources on this topic."
-};
-const REPORT_WITH_CONFLICT = {
-  title: "Investigation Report: Project Zephyr Output Discrepancy",
-  subtitle: "Automated audit of fiscal projections comparing internal ledger documents against public market analysis.",
-  findings: [
-    { claim: "Internal ledger projects a 12.5% revenue increase driven by new service contracts.", source_type: "document", source_detail: "Fin-2024-Q3.pdf, p.7" },
-    { claim: "Public market analysis suggests stagnation at 4.2% due to regional economic headwinds.", source_type: "web", source_detail: "bloomberg.com" }
-  ],
-  conflicts: [
-    {
-      topic: "Q3 revenue growth rate",
-      document_claim: "$14.2M estimated revenue, 95% confidence interval (Fin-2024-Q3.pdf).",
-      web_claim: "$11.8M projected peak due to sectoral volatility (bloomberg.com).",
-      note: "The $2.4M delta stems from unverified 'Pipeline-C' contracts not yet visible in public tender registries."
-    }
-  ],
-  conclusion: "Caution rating. Internal projections remain optimistic while external signals indicate a cooling period. Recommend re-evaluating pending contract valuations before quarter end."
-};
 
 function pillarPillClass(sourceType) {
   if (sourceType === "document") return "pill-document";
@@ -207,9 +172,8 @@ function renderReport(data) {
     traceEl.appendChild(node);
   });
 }
-renderReport(REPORT_NO_CONFLICT);
 
-// Real call — replaces demo fixtures the moment Vanshi's endpoint responds.
+// Real call — populates the report the moment the backend responds.
 async function fetchReport(message) {
   try {
     const res = await fetch(`${API_BASE}/api/chat/report`, {
@@ -220,8 +184,8 @@ async function fetchReport(message) {
     if (!res.ok) throw new Error("report endpoint returned " + res.status);
     return await res.json();
   } catch (e) {
-    console.warn("[demo mode] /api/chat/report unavailable, showing fixture data:", e.message);
-    return null; // caller keeps showing the demo fixture
+    console.warn("[demo mode] /api/chat/report unavailable:", e.message);
+    return null; // caller shows a clear "backend unavailable" state instead
   }
 }
 
@@ -250,17 +214,8 @@ document.getElementById("hybrid-chat-send").addEventListener("click", async () =
   if (!text) return;
   input.value = "";
 
-  if (currentHybridMode === "report") {
-    // Report Mode: hit the real report endpoint; fall back to the demo
-    // fixture (clearly still gated by the Demo Mode badge) only on failure.
-    const real = await fetchReport(text);
-    if (real) {
-      renderReport(normalizeReport(real, text));
-    } else {
-      renderReport(document.getElementById("report-demo-toggle").checked ? REPORT_WITH_CONFLICT : REPORT_NO_CONFLICT);
-    }
-    return;
-  }
+  const chatEmptyState = document.getElementById("chat-empty-state");
+  if (chatEmptyState) chatEmptyState.remove();
 
   appendUserBubble("chat-thread", text);
 
@@ -281,6 +236,40 @@ document.getElementById("hybrid-chat-send").addEventListener("click", async () =
     appendAiBubble("chat-thread", finalAnswer || "(The agent stream ended without a final message.)");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Report Mode — send handler (dedicated input, separate from Chat Mode)
+// ---------------------------------------------------------------------------
+document.getElementById("report-chat-send").addEventListener("click", async () => {
+  const input = document.getElementById("report-chat-input");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+
+  document.getElementById("report-empty-state").classList.add("hidden");
+  document.getElementById("report-body").classList.remove("hidden");
+
+  const real = await fetchReport(text);
+  if (real) {
+    renderReport(normalizeReport(real, text));
+  } else {
+    renderReportUnavailable(text);
+  }
+});
+
+// Shown when /api/chat/report can't be reached — an honest "no report" state
+// rather than fabricated findings (keeps with Section 16: never fake a trace
+// or a result that didn't really come back from the backend).
+function renderReportUnavailable(query) {
+  document.getElementById("report-title").textContent = `Investigation Report: ${query}`;
+  document.getElementById("report-subtitle").textContent = "Backend not reachable — no report could be generated for this query.";
+  document.getElementById("report-conflict-badge").classList.add("hidden");
+  document.getElementById("report-findings").innerHTML =
+    '<p class="text-on-surface-variant">(Demo mode — connect the backend to generate a real, cited report here.)</p>';
+  document.getElementById("report-conflicts-section").classList.add("hidden");
+  document.getElementById("report-conclusion").textContent = "";
+  document.getElementById("report-trace-steps").innerHTML = "";
+}
 
 function appendUserBubble(containerId, text) {
   const el = document.createElement("div");
