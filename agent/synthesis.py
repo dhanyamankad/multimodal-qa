@@ -18,7 +18,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_groq import ChatGroq
 
-REASONING_MODEL = "openai/gpt-oss-120b"
+REASONING_MODEL = "llama-3.3-70b-versatile"
 
 _report_llm = ChatGroq(
     model=REASONING_MODEL,

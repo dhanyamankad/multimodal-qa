@@ -24,6 +24,55 @@ let uploadedDocCount = 0;
 let uploadedImageCount = 0;
 
 // ---------------------------------------------------------------------------
+// Indexing lock — while a PDF is being chunked/embedded or an image is being
+// uploaded, chat inputs must be disabled. Sending a question mid-index either
+// silently returns nothing (document not in Chroma yet) or answers against a
+// stale/incomplete session state — so this is a correctness fix, not just
+// polish. A counter (not a boolean) supports multiple concurrent uploads:
+// the lock only lifts once every in-flight upload has finished.
+// ---------------------------------------------------------------------------
+let pendingIndexingCount = 0;
+const LOCKABLE_CHAT_INPUTS = [
+  { input: "hybrid-chat-input", send: "hybrid-chat-send" },
+  { input: "report-chat-input", send: "report-chat-send" },
+  { input: "docqa-chat-input", send: "docqa-chat-send" },
+  { input: "image-chat-input", send: "image-chat-send" },
+];
+const INDEXING_LOCK_PLACEHOLDER = "Indexing in progress — please wait…";
+const _originalPlaceholders = {};
+
+function updateIndexingLockUI() {
+  const locked = pendingIndexingCount > 0;
+  LOCKABLE_CHAT_INPUTS.forEach(({ input, send }) => {
+    const inputEl = document.getElementById(input);
+    const sendEl = document.getElementById(send);
+    if (!inputEl || !sendEl) return;
+    inputEl.disabled = locked;
+    sendEl.disabled = locked;
+    sendEl.classList.toggle("opacity-50", locked);
+    sendEl.classList.toggle("cursor-not-allowed", locked);
+    if (locked) {
+      if (!(input in _originalPlaceholders)) {
+        _originalPlaceholders[input] = inputEl.placeholder;
+      }
+      inputEl.placeholder = INDEXING_LOCK_PLACEHOLDER;
+    } else if (input in _originalPlaceholders) {
+      inputEl.placeholder = _originalPlaceholders[input];
+    }
+  });
+}
+
+function beginIndexing() {
+  pendingIndexingCount += 1;
+  updateIndexingLockUI();
+}
+
+function endIndexing() {
+  pendingIndexingCount = Math.max(0, pendingIndexingCount - 1);
+  updateIndexingLockUI();
+}
+
+// ---------------------------------------------------------------------------
 // Onboarding modal — explains what each tab is for and that uploads are
 // strictly per-session. Shown on every fresh page load (a refresh is a brand
 // new session, per the cleanup logic below) unless the person has checked
@@ -100,6 +149,7 @@ function wireEnterToSend(textareaId, sendButtonId) {
     }
     // Plain Enter -> send, and don't also insert a newline into the box.
     e.preventDefault();
+    if (pendingIndexingCount > 0) return; // input is locked while indexing
     sendButton.click();
   });
 }
@@ -321,6 +371,7 @@ function normalizeReport(real, query) {
 // Hybrid Chat — send handler (Chat Mode)
 // ---------------------------------------------------------------------------
 document.getElementById("hybrid-chat-send").addEventListener("click", async () => {
+  if (pendingIndexingCount > 0) return; // input is locked while indexing
   const input = document.getElementById("hybrid-chat-input");
   const text = input.value.trim();
   if (!text) return;
@@ -353,6 +404,7 @@ document.getElementById("hybrid-chat-send").addEventListener("click", async () =
 // Report Mode — send handler (dedicated input, separate from Chat Mode)
 // ---------------------------------------------------------------------------
 document.getElementById("report-chat-send").addEventListener("click", async () => {
+  if (pendingIndexingCount > 0) return; // input is locked while indexing
   const input = document.getElementById("report-chat-input");
   const text = input.value.trim();
   if (!text) return;
@@ -451,14 +503,22 @@ async function uploadPdf(file, card) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("session_id", sessionId); // required Form(...) field on Vanshi's endpoint — was missing, would 422
+  beginIndexing();
   try {
     const res = await fetch(`${API_BASE}/api/upload/pdf`, { method: "POST", body: formData });
     if (!res.ok) throw new Error(String(res.status));
     const data = await res.json();
-    markDocIndexed(card, `${data.chunks_ingested ?? "?"} chunks indexed`); // key is chunks_ingested, not chunk_count
+    const ocrNote = data.ocr_page_count > 0
+      ? ` (${data.ocr_page_count} page${data.ocr_page_count === 1 ? "" : "s"} read via OCR)`
+      : "";
+    markDocIndexed(card, `${data.chunks_ingested ?? "?"} chunks indexed${ocrNote}`); // key is chunks_ingested, not chunk_count
+    endIndexing();
   } catch (e) {
     console.warn("[demo mode] /api/upload/pdf unavailable, simulating indexing locally:", e.message);
-    setTimeout(() => markDocIndexed(card, "Indexed (demo — not yet sent to backend)"), 1200);
+    setTimeout(() => {
+      markDocIndexed(card, "Indexed (demo — not yet sent to backend)");
+      endIndexing();
+    }, 1200);
   }
 }
 function markDocIndexed(card, statusText) {
@@ -475,6 +535,7 @@ function markDocIndexed(card, statusText) {
 }
 
 document.getElementById("docqa-chat-send").addEventListener("click", async () => {
+  if (pendingIndexingCount > 0) return; // input is locked while indexing
   const input = document.getElementById("docqa-chat-input");
   const text = input.value.trim();
   if (!text) return;
@@ -535,6 +596,7 @@ async function uploadImage(file, thumb) {
   formData.append("file", file);
   formData.append("session_id", sessionId); // required Form(...) field on Vanshi's endpoint — was missing, would 422
   const statusEl = thumb.querySelector(".thumb-status");
+  beginIndexing();
   try {
     const res = await fetch(`${API_BASE}/api/upload/image`, { method: "POST", body: formData });
     if (!res.ok) throw new Error(String(res.status));
@@ -545,12 +607,14 @@ async function uploadImage(file, thumb) {
     if (statusEl) statusEl.remove();
     updateImageCountLabel();
     updateHybridSourcesHint();
+    endIndexing();
   } catch (e) {
     console.warn("[demo mode] /api/upload/image unavailable:", e.message);
     if (statusEl) statusEl.textContent = "Demo mode";
     uploadedImageCount += 1;
     updateImageCountLabel();
     updateHybridSourcesHint();
+    endIndexing();
   }
 }
 
@@ -560,6 +624,7 @@ function updateImageCountLabel() {
 }
 
 document.getElementById("image-chat-send").addEventListener("click", async () => {
+  if (pendingIndexingCount > 0) return; // input is locked while indexing
   const input = document.getElementById("image-chat-input");
   const text = input.value.trim();
   if (!text) return;

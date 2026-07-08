@@ -30,7 +30,7 @@ do not change this shape without syncing with her first):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from rag.ingest import get_ingestor
 
@@ -63,6 +63,9 @@ class RetrievedChunk:
     filename: str
     page_number: int
     similarity: float
+    ocr: bool = False  # True if this chunk's text came from vision OCR of an
+    # image-only page (see rag/ingest.py) rather than the PDF's real text
+    # layer. Surfaced so citations can flag pages worth double-checking.
 
 
 @dataclass
@@ -82,7 +85,8 @@ class RetrievalResponse:
             return "No relevant information found in uploaded documents."
         parts = []
         for c in self.chunks:
-            parts.append(f"[{c.filename}, p.{c.page_number}]\n{c.text}")
+            tag = " (OCR transcription)" if c.ocr else ""
+            parts.append(f"[{c.filename}, p.{c.page_number}{tag}]\n{c.text}")
         return "\n\n".join(parts)
 
 
@@ -153,6 +157,7 @@ def retrieve(
                     filename=meta.get("filename", "unknown"),
                     page_number=meta.get("page_number", -1),
                     similarity=similarity,
+                    ocr=bool(meta.get("ocr", False)),
                 )
             )
 
@@ -183,6 +188,7 @@ def retrieve_chunks(
             "filename": c.filename,
             "page": c.page_number,
             "score": c.similarity,
+            "ocr": c.ocr,
         }
         for c in response.chunks
     ]

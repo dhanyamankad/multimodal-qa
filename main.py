@@ -156,7 +156,7 @@ async def upload_pdf(session_id: str = Form(...), file: UploadFile = File(...)):
         f.write(contents)
 
     try:
-        from rag.ingest import ingest_pdf  # Dhanya's owned module
+        from rag.ingest import ingest_pdf_result  # Dhanya's owned module
     except Exception as exc:
         # rag/ingest.py is currently an empty stub — fail the request clearly
         # rather than pretending ingestion succeeded.
@@ -165,8 +165,22 @@ async def upload_pdf(session_id: str = Form(...), file: UploadFile = File(...)):
             detail=f"PDF ingestion pipeline not yet available: {exc}",
         )
 
-    chunk_count = ingest_pdf(dest_path, session_id=session_id)
-    return {"session_id": session_id, "filename": file.filename, "chunks_ingested": chunk_count}
+    try:
+        result = ingest_pdf_result(dest_path, session_id=session_id)
+    except ValueError as exc:
+        # e.g. every page was blank, or OCR failed on every image-only page
+        # (bad GROQ_API_KEY, vision model unavailable, etc).
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return {
+        "session_id": session_id,
+        "filename": file.filename,
+        "chunks_ingested": result.chunk_count,
+        "page_count": result.page_count,
+        # Pages that had no real text layer and were transcribed via vision
+        # OCR instead (e.g. PPT-exported slides that are flattened images).
+        "ocr_page_count": result.ocr_page_count,
+    }
 
 
 @app.post("/api/upload/image")

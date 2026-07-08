@@ -12,17 +12,12 @@ string instead of an unhandled exception (Section 6.4).
 from __future__ import annotations
 
 import base64
-import os
 
 from langchain_core.tools import tool
 
 from agent.safe_call import safe_call
 from agent.session_context import get_session_id, is_allowed_image
-
-try:
-    from groq import Groq
-except ImportError:  # pragma: no cover - dependency should always be installed per requirements.txt
-    Groq = None  # type: ignore
+from agent.vision import vision_call
 
 # --- Interface with Dhanya's rag/retrieve.py -------------------------------
 # EXPECTED CONTRACT (flagged in PRD Section 4 as an open interface item):
@@ -51,24 +46,6 @@ except Exception:  # noqa: BLE001
         to search_web, keeping the agent usable end-to-end before RAG lands."""
         return []
 
-# --- Vision models (see PRD 3.0 / Section 5 / Section 14) ------------------
-# Confirmed live against console.groq.com/docs as of this build (2026-07-07):
-VISION_MODEL_PRIMARY = "qwen/qwen3.6-27b"
-# NOTE (status-log-worthy deviation, flagged not silently applied): Groq
-# deprecated meta-llama/llama-4-maverick-17b-128e-instruct on 2026-02-20 in
-# favor of openai/gpt-oss-120b (a text-only model, not a vision replacement).
-# PRD Section 3.0/14 explicitly says to keep this string coded as the manual
-# fallback regardless, so it stays below. In practice this means the fallback
-# branch will reliably fail closed and get caught by @safe_call — which is a
-# fine demonstration of graceful degradation, just not a working fallback.
-# If a second real vision model is ever needed, there currently isn't a clean
-# one on Groq (llama-4-scout was ALSO deprecated 2026-06-17, recommended
-# replacement is qwen/qwen3.6-27b itself, i.e. the primary, not a distinct
-# fallback).
-VISION_MODEL_FALLBACK = "meta-llama/llama-4-maverick-17b-128e-instruct"
-
-_groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY")) if Groq else None
-
 
 @tool
 @safe_call(fallback_message="Document search is temporarily unavailable.")
@@ -94,7 +71,8 @@ def search_documents(query: str) -> str:
             "search_web if the question needs an answer from somewhere."
         )
     formatted = [
-        f"[{c['filename']}, p.{c['page']}] {c['text']}" for c in chunks
+        f"[{c['filename']}, p.{c['page']}{' (OCR transcription)' if c.get('ocr') else ''}] {c['text']}"
+        for c in chunks
     ]
     return "\n\n".join(formatted)
 
@@ -120,26 +98,6 @@ def search_web(query: str) -> str:
     return result
 
 
-def _vision_call(model_name: str, image_b64: str, question: str) -> str:
-    response = _groq_client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": question},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                    },
-                ],
-            }
-        ],
-        max_tokens=800,
-    )
-    return response.choices[0].message.content
-
-
 @tool
 @safe_call(fallback_message="Image analysis is temporarily unavailable.")
 def describe_image(image_path: str, question: str = "Describe this image in detail.") -> str:
@@ -153,9 +111,6 @@ def describe_image(image_path: str, question: str = "Describe this image in deta
     image path that's relevant to the question (the available paths are
     listed in the injected session context in the user message).
     """
-    if _groq_client is None:
-        raise RuntimeError("Groq client not configured — check GROQ_API_KEY")
-
     # image_path is an LLM-supplied argument. Verify it's actually one of
     # this session's own uploads before ever touching the filesystem, so a
     # hallucinated or injected path can't read another session's image (or
@@ -169,10 +124,7 @@ def describe_image(image_path: str, question: str = "Describe this image in deta
     with open(image_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    try:
-        return _vision_call(VISION_MODEL_PRIMARY, image_b64, question)
-    except Exception:
-        # Manual fallback per PRD Section 3.0/14. See VISION_MODEL_FALLBACK
-        # comment above re: this model being deprecated on Groq's side —
-        # if this also raises, the outer @safe_call catches it cleanly.
-        return _vision_call(VISION_MODEL_FALLBACK, image_b64, question)
+    # vision_call already tries VISION_MODEL_PRIMARY then VISION_MODEL_FALLBACK
+    # internally (see agent/vision.py); if both fail it raises, and the outer
+    # @safe_call turns that into a clean fallback string.
+    return vision_call(image_b64, question)

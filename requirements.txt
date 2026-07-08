@@ -11,6 +11,7 @@ chromadb
 sentence-transformers
 pypdf
 pdfplumber
+PyMuPDF
 ddgs
 groq
 python-multipart
