@@ -499,7 +499,22 @@ async def stream(
         messages = _build_full_messages(req)
         last_ai_message: Optional[str] = None
         with use_session(session_id, _SESSION_IMAGES.get(session_id)):
-            for mode, chunk in stream_agent(messages):
+            for item in stream_agent(messages):
+                # Defensive unpacking: with stream_mode=["updates", "messages"]
+                # this should always be a (mode, chunk) 2-tuple, but some
+                # LangGraph versions add a leading namespace element when
+                # subgraphs are involved (making it a 3-tuple), and a bare
+                # string stream_mode yields no tuple at all. Handle all three
+                # shapes so a future version bump can't reintroduce this same
+                # crash.
+                if isinstance(item, tuple) and len(item) == 2:
+                    mode, chunk = item
+                elif isinstance(item, tuple) and len(item) == 3:
+                    _namespace, mode, chunk = item
+                else:
+                    # Bare chunk, no mode info — assume "updates" since that's
+                    # LangGraph's default single-mode shape.
+                    mode, chunk = "updates", item
                 if mode == "updates":
                     for _node_name, node_output in chunk.items():
                         node_messages = (

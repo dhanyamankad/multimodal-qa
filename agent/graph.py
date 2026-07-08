@@ -100,9 +100,18 @@ def invoke_agent(messages: list[dict]):
 def stream_agent(messages: list[dict]):
     """Generator over the agent's real execution trace, in the order tool
     calls and model responses actually happen. main.py's SSE endpoint wraps
-    this directly — never fabricate or reorder these events."""
+    this directly — never fabricate or reorder these events.
+
+    IMPORTANT: stream_mode must be a LIST (not a bare string). With a list,
+    LangGraph yields (mode, chunk) tuples — one per stream mode — which is
+    what main.py's event_generator() unpacks via `for mode, chunk in ...`.
+    Passing a single string here instead makes LangGraph yield bare chunks
+    (no tuple), which breaks that unpacking with a
+    'ValueError: not enough values to unpack' the moment an update touches
+    exactly one node.
+    """
     return AGENT.stream(
         {"messages": messages},
         config={"recursion_limit": RECURSION_LIMIT},
-        stream_mode="updates",
+        stream_mode=["updates", "messages"],
     )
