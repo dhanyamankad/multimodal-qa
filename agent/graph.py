@@ -75,6 +75,15 @@ def build_agent():
         model=REASONING_MODEL,
         api_key=os.environ.get("GROQ_API_KEY"),
         temperature=0.2,
+        # gpt-oss-120b is a reasoning model on Groq; without this, Groq
+        # defaults to reasoning_format="raw" and the model's internal
+        # chain-of-thought (including verbatim fragments of retrieved
+        # tool output / system prompt it was "thinking out loud" about)
+        # comes back INSIDE message.content — which is exactly what
+        # stream_agent()/invoke_agent() treat as the real answer. "hidden"
+        # tells Groq to strip reasoning from the response entirely so
+        # content is only ever the actual final answer.
+        reasoning_format="hidden",
     )
     tools = [search_documents, search_web, describe_image]
     return create_react_agent(llm, tools, prompt=SYSTEM_PROMPT)

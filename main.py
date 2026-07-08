@@ -493,43 +493,101 @@ async def stream(
         cross_reference_documents=cross_reference_documents,
     )
 
-    def event_generator():
+    async def event_generator():
         import json as _json
+        import queue as _queue
 
+        # NOTE ON SESSION-CONTEXT SAFETY:
+        # This used to be a plain `def event_generator()` (sync generator)
+        # with `with use_session(...):` wrapped around the `for item in
+        # stream_agent(messages): ... yield ...` loop. That looks safe but
+        # isn't: Starlette/anyio drive a sync generator behind an async
+        # route by calling `next()` on it once per iteration via
+        # `anyio.to_thread.run_sync`, and each of those calls can land on a
+        # *different* worker thread from the threadpool. contextvars are
+        # thread-scoped — `use_session`'s `.set()` only affects whichever
+        # thread is running when it's called, and a suspended generator
+        # does not carry "its" context across a resume on a different
+        # thread. So mid-stream, a tool call (search_documents,
+        # describe_image) could run on a thread where get_session_id()
+        # still returns the default (None) or a stale value from whatever
+        # else last ran on that thread — silently breaking session
+        # isolation exactly in the one endpoint that streams.
+        #
+        # Fix: do ALL of the actual agent work — entering use_session(),
+        # driving stream_agent() to completion, everything that touches
+        # the session contextvar — inside a single dedicated worker
+        # thread, started once via loop.run_in_executor. That thread's
+        # context is set once and never has to survive being resumed on
+        # a different thread. The worker pushes serialized SSE chunks
+        # into a plain thread-safe queue.Queue; this async generator just
+        # drains that queue and yields, which is safe because the
+        # consumer side never touches session_id/contextvars at all.
         messages = _build_full_messages(req)
+        q: "_queue.Queue" = _queue.Queue()
+        _DONE = object()
+
+        def worker():
+            last_ai_message: Optional[str] = None
+            try:
+                with use_session(session_id, _SESSION_IMAGES.get(session_id)):
+                    for item in stream_agent(messages):
+                        # Defensive unpacking: with stream_mode=["updates",
+                        # "messages"] this should always be a (mode, chunk)
+                        # 2-tuple, but some LangGraph versions add a leading
+                        # namespace element when subgraphs are involved
+                        # (making it a 3-tuple), and a bare string
+                        # stream_mode yields no tuple at all. Handle all
+                        # three shapes so a future version bump can't
+                        # reintroduce this same crash.
+                        if isinstance(item, tuple) and len(item) == 2:
+                            mode, chunk = item
+                        elif isinstance(item, tuple) and len(item) == 3:
+                            _namespace, mode, chunk = item
+                        else:
+                            # Bare chunk, no mode info — assume "updates"
+                            # since that's LangGraph's default single-mode
+                            # shape.
+                            mode, chunk = "updates", item
+                        if mode == "updates":
+                            for _node_name, node_output in chunk.items():
+                                node_messages = (
+                                    node_output.get("messages", [])
+                                    if isinstance(node_output, dict)
+                                    else []
+                                )
+                                for msg in node_messages:
+                                    if isinstance(msg, AIMessage) and msg.content:
+                                        # Last non-empty AIMessage content
+                                        # wins, same rule the frontend used
+                                        # to apply itself — intermediate
+                                        # reasoning content can appear
+                                        # before the true final answer.
+                                        last_ai_message = msg.content
+                        serialized = _serialize_stream_item(mode, chunk)
+                        if serialized.strip():
+                            q.put(("data", serialized))
+            except Exception as exc:  # surface it instead of hanging the stream
+                q.put(("error", str(exc)))
+            finally:
+                q.put(("final", last_ai_message))
+                q.put(_DONE)
+
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, worker)
+
         last_ai_message: Optional[str] = None
-        with use_session(session_id, _SESSION_IMAGES.get(session_id)):
-            for item in stream_agent(messages):
-                # Defensive unpacking: with stream_mode=["updates", "messages"]
-                # this should always be a (mode, chunk) 2-tuple, but some
-                # LangGraph versions add a leading namespace element when
-                # subgraphs are involved (making it a 3-tuple), and a bare
-                # string stream_mode yields no tuple at all. Handle all three
-                # shapes so a future version bump can't reintroduce this same
-                # crash.
-                if isinstance(item, tuple) and len(item) == 2:
-                    mode, chunk = item
-                elif isinstance(item, tuple) and len(item) == 3:
-                    _namespace, mode, chunk = item
-                else:
-                    # Bare chunk, no mode info — assume "updates" since that's
-                    # LangGraph's default single-mode shape.
-                    mode, chunk = "updates", item
-                if mode == "updates":
-                    for _node_name, node_output in chunk.items():
-                        node_messages = (
-                            node_output.get("messages", []) if isinstance(node_output, dict) else []
-                        )
-                        for msg in node_messages:
-                            if isinstance(msg, AIMessage) and msg.content:
-                                # Last non-empty AIMessage content wins, same
-                                # rule the frontend used to apply itself —
-                                # intermediate reasoning content can appear
-                                # before the true final answer.
-                                last_ai_message = msg.content
-                serialized = _serialize_stream_item(mode, chunk)
-                if serialized.strip():
-                    yield serialized
+        while True:
+            kind_payload = await loop.run_in_executor(None, q.get)
+            if kind_payload is _DONE:
+                break
+            kind, payload = kind_payload
+            if kind == "data":
+                yield payload
+            elif kind == "error":
+                yield f"data: {_json.dumps({'type': 'error', 'content': payload})}\n\n"
+            elif kind == "final":
+                last_ai_message = payload
 
         if last_ai_message:
             _append_history(session_id, "user", query)
