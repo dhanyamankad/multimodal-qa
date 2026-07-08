@@ -95,19 +95,28 @@ class DocumentIngestor:
 
     # ---- chunking --------------------------------------------------------
 
-    def _chunk_pages(self, filename: str, pages: List[PageText]):
+    def _chunk_pages(self, filename: str, pages: List[PageText], session_id: str):
         """
         Chunk each page's text independently (rather than chunking the
         whole document as one string) so every chunk can be tagged with
         exactly one page number. A chunk that straddled two pages would
         make citation ambiguous.
+
+        Every chunk is also tagged with `session_id` so retrieve.py can
+        filter strictly to the requesting session's own uploads. Without
+        this, every session shares one global collection and users see
+        each other's documents.
         """
         ids, documents, metadatas = [], [], []
         for page in pages:
             page_chunks = self._splitter.split_text(page.text)
             for idx, chunk in enumerate(page_chunks):
+                # session_id folded into the id too, so the same PDF
+                # re-uploaded in a different session gets distinct chunk ids
+                # instead of upserting over (and leaking into) another
+                # session's copy.
                 chunk_id = hashlib.sha1(
-                    f"{filename}:{page.page_number}:{idx}:{chunk[:50]}".encode("utf-8")
+                    f"{session_id}:{filename}:{page.page_number}:{idx}:{chunk[:50]}".encode("utf-8")
                 ).hexdigest()
                 ids.append(chunk_id)
                 documents.append(chunk)
@@ -115,13 +124,16 @@ class DocumentIngestor:
                     {
                         "filename": filename,
                         "page_number": page.page_number,
+                        "session_id": session_id,
                     }
                 )
         return ids, documents, metadatas
 
     # ---- public API --------------------------------------------------------
 
-    def ingest_pdf(self, pdf_path: str, filename: Optional[str] = None) -> IngestResult:
+    def ingest_pdf(
+        self, pdf_path: str, filename: Optional[str] = None, session_id: str = "default"
+    ) -> IngestResult:
         """
         Ingest a single PDF file into ChromaDB.
 
@@ -130,6 +142,10 @@ class DocumentIngestor:
                 is fine, we only read from it here).
             filename: display name to store in metadata / show in citations.
                 Defaults to the basename of pdf_path.
+            session_id: isolates this document's chunks so only the
+                uploading session's own retrieve() calls can ever see them.
+                Required for real multi-user isolation — see the SESSION
+                ISOLATION note in retrieve.py.
 
         Returns:
             IngestResult with chunk_count, used by the
@@ -144,7 +160,7 @@ class DocumentIngestor:
                 "It may be a scanned/image-only PDF (OCR is out of scope for this build)."
             )
 
-        ids, documents, metadatas = self._chunk_pages(filename, pages)
+        ids, documents, metadatas = self._chunk_pages(filename, pages, session_id)
         if not documents:
             raise ValueError(f"'{filename}' produced no chunks after splitting.")
 
@@ -173,6 +189,13 @@ class DocumentIngestor:
         """Expose the embedding function so retrieve.py embeds queries the same way."""
         return self._embeddings
 
+    def delete_session(self, session_id: str) -> None:
+        """Purge every chunk tagged with this session_id. Called when a
+        session ends (page refresh / explicit reset) so chunks don't sit
+        around forever and so a reused session_id can never accidentally
+        inherit stale data."""
+        self._collection.delete(where={"session_id": session_id})
+
 
 # Module-level singleton so main.py and retrieve.py share one Chroma client
 # instead of each opening their own (avoids file-lock contention on the
@@ -195,6 +218,11 @@ def ingest_pdf(pdf_path: str, session_id: Optional[str] = None) -> int:
     UPLOAD_DIR handling in main.py's upload_pdf endpoint), so strip that
     prefix back off here to get a clean, citation-friendly filename before
     handing off to the real DocumentIngestor.
+
+    SESSION ISOLATION: session_id is now also stored as per-chunk metadata
+    (not just used to namespace the filename) so retrieve.py can filter
+    strictly by session. Every uploaded doc must be tagged with a real
+    session_id or it becomes visible to every other session.
     """
     filename = os.path.basename(pdf_path)
     if session_id:
@@ -202,5 +230,12 @@ def ingest_pdf(pdf_path: str, session_id: Optional[str] = None) -> int:
         if filename.startswith(prefix):
             filename = filename[len(prefix):]
 
-    result = get_ingestor().ingest_pdf(pdf_path, filename=filename)
+    result = get_ingestor().ingest_pdf(
+        pdf_path, filename=filename, session_id=session_id or "default"
+    )
     return result.chunk_count
+
+
+def delete_session_documents(session_id: str) -> None:
+    """Adapter for main.py's session-cleanup endpoint."""
+    get_ingestor().delete_session(session_id)

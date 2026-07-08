@@ -100,26 +100,44 @@ def retrieve(
     query: str,
     top_k: int = DEFAULT_TOP_K,
     threshold: float = SIMILARITY_THRESHOLD,
+    session_id: Optional[str] = None,
 ) -> RetrievalResponse:
     """
     Query ChromaDB for the top_k most similar chunks to `query`, then
     filter to only those above `threshold`.
 
+    SESSION ISOLATION (critical): `session_id`, when provided, restricts the
+    query to only chunks ingested under that same session_id via
+    rag/ingest.py. Without this filter every session shares one global
+    Chroma collection and a user could get answers sourced from documents
+    someone else uploaded. If session_id is None, this falls back to
+    querying the whole collection (used only for local/manual testing).
+
     Returns found=False (never a forced/best-effort answer) when either:
-      - the collection is empty (nothing has been ingested yet), or
+      - the collection is empty (nothing has been ingested yet),
+      - nothing matches this session_id, or
       - every candidate falls below the similarity threshold.
     """
     ingestor = get_ingestor()
+    where = {"session_id": session_id} if session_id else None
 
     if ingestor.collection.count() == 0:
         return RetrievalResponse(found=False, query=query)
 
     query_embedding = ingestor.embeddings.embed_query(query)
 
-    results = ingestor.collection.query(
+    # n_results is sized off the whole collection count (Chroma has no cheap
+    # way to count a filtered subset up front) — the `where` filter below
+    # still restricts which documents can actually come back, so over-asking
+    # here just means "ask for at most this many, scoped to the session,"
+    # never a cross-session leak.
+    query_kwargs = dict(
         query_embeddings=[query_embedding],
         n_results=min(top_k, max(ingestor.collection.count(), 1)),
     )
+    if where:
+        query_kwargs["where"] = where
+    results = ingestor.collection.query(**query_kwargs)
 
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
@@ -143,17 +161,20 @@ def retrieve(
 
     return RetrievalResponse(found=True, chunks=chunks, query=query)
 
-def retrieve_chunks(query: str, threshold: float = SIMILARITY_THRESHOLD) -> List[dict]:
+def retrieve_chunks(
+    query: str, threshold: float = SIMILARITY_THRESHOLD, session_id: Optional[str] = None
+) -> List[dict]:
     """
     Adapter for agent/tools.py (Vanshi's module), which expects:
-        retrieve_chunks(query, threshold) -> list[dict]
+        retrieve_chunks(query, threshold, session_id) -> list[dict]
         each dict: {"text": str, "filename": str, "page": int, "score": float}
 
     This wraps the real retrieve() / RetrievalResponse interface above rather
     than duplicating retrieval logic. Keep this in sync if RetrievedChunk's
-    fields ever change.
+    fields ever change. session_id is forwarded so results never cross
+    session boundaries (see retrieve()'s SESSION ISOLATION note).
     """
-    response = retrieve(query=query, threshold=threshold)
+    response = retrieve(query=query, threshold=threshold, session_id=session_id)
     if not response.found:
         return []
     return [

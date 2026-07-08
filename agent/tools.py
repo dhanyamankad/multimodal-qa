@@ -17,6 +17,7 @@ import os
 from langchain_core.tools import tool
 
 from agent.safe_call import safe_call
+from agent.session_context import get_session_id, is_allowed_image
 
 try:
     from groq import Groq
@@ -43,7 +44,7 @@ except Exception:  # noqa: BLE001
     # only used at all if the import above fails (rag/retrieve.py missing).
     CHUNK_CONFIDENCE_THRESHOLD = 0.08
 
-    def retrieve_chunks(query: str, threshold: float = CHUNK_CONFIDENCE_THRESHOLD):
+    def retrieve_chunks(query: str, threshold: float = CHUNK_CONFIDENCE_THRESHOLD, session_id=None):
         """TEMPORARY PLACEHOLDER — replace by importing Dhanya's real
         rag/retrieve.py once it's implemented. Returns no chunks, which makes
         search_documents correctly report NOT_FOUND so the router falls back
@@ -79,7 +80,13 @@ def search_documents(query: str) -> str:
     above-confidence-threshold chunks with page-level source metadata for
     citation, or an explicit NOT_FOUND signal if nothing cleared the bar.
     """
-    chunks = retrieve_chunks(query, threshold=CHUNK_CONFIDENCE_THRESHOLD)
+    # session_id comes from the contextvar set by main.py for this request,
+    # NEVER from the LLM — see agent/session_context.py for why. This is
+    # what makes each session's document Q&A strictly scoped to only the
+    # files that session itself uploaded.
+    chunks = retrieve_chunks(
+        query, threshold=CHUNK_CONFIDENCE_THRESHOLD, session_id=get_session_id()
+    )
     if not chunks:
         return (
             "NOT_FOUND_IN_DOCUMENTS: no above-threshold chunks matched this "
@@ -141,9 +148,23 @@ def describe_image(image_path: str, question: str = "Describe this image in deta
     Use this whenever an image was uploaded in the current turn — it should
     fire before (or alongside, when cross-referencing) any document/web search
     needed to complete the answer, per PRD Section 6.5 routing rule 1.
+
+    If multiple images were uploaded in this session, call this once per
+    image path that's relevant to the question (the available paths are
+    listed in the injected session context in the user message).
     """
     if _groq_client is None:
         raise RuntimeError("Groq client not configured — check GROQ_API_KEY")
+
+    # image_path is an LLM-supplied argument. Verify it's actually one of
+    # this session's own uploads before ever touching the filesystem, so a
+    # hallucinated or injected path can't read another session's image (or
+    # any other file on disk).
+    if not is_allowed_image(image_path):
+        return (
+            "This image path is not part of the current session's uploads, "
+            "so it was not opened. Only reference images uploaded in this session."
+        )
 
     with open(image_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")

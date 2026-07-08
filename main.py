@@ -23,25 +23,30 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel
 
 from agent.graph import invoke_agent, stream_agent
+from agent.session_context import use_session
 from agent.synthesis import synthesize_chat, synthesize_report
+from rag.ingest import delete_session_documents
 
 app = FastAPI(title="Multimodal Q&A Pro")
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# session_id -> most recently uploaded image path. Simple in-memory session
-# store; matches the "ChromaDB is local/in-memory, resets on restart" note
-# already called out in README's Known Limitations.
-_SESSION_IMAGES: dict[str, str] = {}
+# session_id -> ALL images uploaded in that session (not just the most
+# recent one — a user can upload several images in one session and ask
+# questions that need more than one of them, same as multiple PDFs).
+# Simple in-memory session store; matches the "ChromaDB is local/in-memory,
+# resets on restart" note already called out in README's Known Limitations.
+_SESSION_IMAGES: dict[str, list[str]] = {}
 
 
 class ChatRequest(BaseModel):
     session_id: str
     query: str
-    # Document Q&A tab (Section 3.2): "documents_only" restricts the agent to
-    # search_documents and forbids falling back to search_web, even on
-    # NOT_FOUND_IN_DOCUMENTS. Previously accepted-but-ignored by Pydantic.
+    # Document Q&A tab (Section 3.2): "documents_only" makes search_documents
+    # the preferred/first source, but still allows a search_web fallback when
+    # search_documents comes back NOT_FOUND, or when the question needs
+    # today's value and the uploaded document may be outdated.
     scope: Optional[str] = None
     # Image Studio tab: whether the cross-reference toggle is on, i.e.
     # whether the agent should also check uploaded documents for related
@@ -62,38 +67,57 @@ def _build_input_messages(req: ChatRequest) -> list[dict]:
     used for the image-path context below.
     """
     content = req.query
-    image_path = _SESSION_IMAGES.get(req.session_id)
+    image_paths = _SESSION_IMAGES.get(req.session_id) or []
 
-    if image_path:
+    if image_paths:
+        if len(image_paths) == 1:
+            image_note = f"[An image was uploaded in this session at path: {image_paths[0]}."
+        else:
+            paths_list = "\n".join(f"  - {p}" for p in image_paths)
+            image_note = (
+                f"[{len(image_paths)} images were uploaded in this session, at these paths:\n"
+                f"{paths_list}\n"
+                f"Call describe_image once per path that's actually relevant to this "
+                f"question — not necessarily all of them."
+            )
         content = (
             f"{req.query}\n\n"
-            f"[An image was uploaded in this session at path: {image_path}. "
-            f"If relevant to this question, call describe_image with this path.]"
+            f"{image_note} If relevant to this question, call describe_image with the "
+            f"relevant path(s).]"
         )
         if req.cross_reference_documents:
             content += (
                 "\n\n[Cross-reference mode is ON for this turn: after "
-                "analyzing the image with describe_image, also call "
+                "analyzing the image(s) with describe_image, also call "
                 "search_documents to check whether the uploaded documents "
                 "contain related or corroborating information, and call out "
-                "any connection or discrepancy you find between the image "
+                "any connection or discrepancy you find between the image(s) "
                 "and the documents in your answer.]"
             )
         elif req.cross_reference_documents is False:
             content += (
                 "\n\n[Cross-reference mode is OFF for this turn: answer using "
                 "only describe_image. Do not call search_documents unless the "
-                "question is clearly unrelated to the uploaded image.]"
+                "question is clearly unrelated to the uploaded image(s).]"
             )
 
     if req.scope == "documents_only":
+        # NOTE: "documents_only" now means "documents are the primary,
+        # preferred source" rather than "web search is forbidden outright."
+        # If the uploaded document is dated (e.g. from years ago) and the
+        # question needs the current/up-to-date value, the agent's own
+        # routing rules (agent/graph.py rule 3) already allow a search_web
+        # fallback for explicitly current/live questions, or after
+        # search_documents returns NOT_FOUND_IN_DOCUMENTS. This note just
+        # reinforces the document-first ordering for this tab.
         content += (
-            "\n\n[This question comes from the Document Q&A tab (scope="
-            "documents_only): you must answer using ONLY search_documents. "
-            "Do not call search_web under any circumstances. If "
-            "search_documents returns NOT_FOUND_IN_DOCUMENTS, tell the user "
-            "the answer was not found in the uploaded documents instead of "
-            "falling back to a web search.]"
+            "\n\n[This question comes from the Document Q&A tab: prefer "
+            "search_documents and use it FIRST. Only fall back to search_web "
+            "if search_documents returns NOT_FOUND_IN_DOCUMENTS, or if the "
+            "question is asking whether information in the (possibly dated) "
+            "uploaded document is still current/accurate today — in that "
+            "case call search_web too and note any discrepancy between the "
+            "document and the current web result.]"
         )
 
     return [{"role": "user", "content": content}]
@@ -104,7 +128,8 @@ def chat(req: ChatRequest):
     """Chat Mode conversational response."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty")
-    result = invoke_agent(_build_input_messages(req))
+    with use_session(req.session_id, _SESSION_IMAGES.get(req.session_id)):
+        result = invoke_agent(_build_input_messages(req))
     return {"session_id": req.session_id, "answer": synthesize_chat(result)}
 
 
@@ -113,7 +138,8 @@ def chat_report(req: ChatRequest):
     """Report Mode structured JSON response (schema per Section 3.2)."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty")
-    result = invoke_agent(_build_input_messages(req))
+    with use_session(req.session_id, _SESSION_IMAGES.get(req.session_id)):
+        result = invoke_agent(_build_input_messages(req))
     report = synthesize_report(req.query, result)
     return {"session_id": req.session_id, "report": report}
 
@@ -155,8 +181,35 @@ async def upload_image(session_id: str = Form(...), file: UploadFile = File(...)
     with open(dest_path, "wb") as f:
         f.write(contents)
 
-    _SESSION_IMAGES[session_id] = dest_path
-    return {"session_id": session_id, "image_path": dest_path}
+    # Append rather than overwrite — a session can upload multiple images
+    # and have questions answered against any/all of them, same as PDFs.
+    _SESSION_IMAGES.setdefault(session_id, []).append(dest_path)
+    return {
+        "session_id": session_id,
+        "image_path": dest_path,
+        "image_count": len(_SESSION_IMAGES[session_id]),
+    }
+
+
+@app.delete("/api/session/{session_id}")
+def end_session(session_id: str):
+    """
+    Called when a session ends (page refresh/close, or an explicit 'reset'
+    action) so that session's uploaded document chunks and image files are
+    actually deleted rather than just becoming unreachable. Each page load
+    generates a brand-new session_id client-side, so after this call that
+    session_id has zero chunks and zero images — a genuinely fresh session,
+    not just an inaccessible old one taking up space.
+    """
+    delete_session_documents(session_id)
+
+    for image_path in _SESSION_IMAGES.pop(session_id, []):
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass  # already gone / never existed — nothing to clean up
+
+    return {"session_id": session_id, "status": "cleared"}
 
 
 def _serialize_event(event: dict) -> str:
@@ -199,10 +252,11 @@ async def stream(
                 cross_reference_documents=cross_reference_documents,
             )
         )
-        for event in stream_agent(messages):
-            serialized = _serialize_event(event)
-            if serialized.strip():
-                yield serialized
+        with use_session(session_id, _SESSION_IMAGES.get(session_id)):
+            for event in stream_agent(messages):
+                serialized = _serialize_event(event)
+                if serialized.strip():
+                    yield serialized
         yield "data: {\"type\": \"done\"}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

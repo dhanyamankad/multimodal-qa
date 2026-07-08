@@ -140,3 +140,40 @@ body {
   border-color: var(--pillar-vision);
   background-color: rgba(249, 112, 102, 0.06);
 }
+
+/* ---- onboarding modal ---- */
+@keyframes onboarding-pop-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.onboarding-modal-anim {
+  animation: onboarding-pop-in 0.25s ease-out;
+}
+
+/* ---- image gallery thumbnails (Image Studio, multi-upload) ---- */
+.image-gallery-thumb {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid #464554;
+  background: #1b1b23;
+}
+.image-gallery-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.image-gallery-thumb .thumb-status {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(249, 112, 102, 0.15);
+  border: 1px solid rgba(249, 112, 102, 0.4);
+  color: #F97066;
+}

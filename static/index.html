@@ -227,7 +227,7 @@
               <p class="text-body-lg text-on-surface">Drop PDF here</p>
               <p class="text-body-md text-on-surface-variant mt-xs">or click to browse from device</p>
             </div>
-            <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden">
+            <input type="file" id="pdf-file-input" accept="application/pdf" multiple class="hidden">
           </div>
         </div>
         <div class="flex-1 overflow-y-auto px-lg space-y-md scrollbar-hide pb-lg">
@@ -237,7 +237,7 @@
           <div id="doc-empty-state" class="flex flex-col items-center text-center gap-sm py-lg">
             <span class="material-symbols-outlined text-3xl text-on-surface-variant">description</span>
             <p class="font-body-lg text-on-surface">No documents yet</p>
-            <p class="text-body-md text-on-surface-variant">Your uploaded PDFs will appear here for indexing.</p>
+            <p class="text-body-md text-on-surface-variant">Upload one or more PDFs — they'll all be indexed and available together, only within this session.</p>
           </div>
           <div id="doc-list" class="space-y-md"></div>
         </div>
@@ -299,21 +299,19 @@
 
         <div id="image-empty-state" class="dropzone dropzone-vision rounded-xl flex-1 min-h-[380px] flex flex-col items-center justify-center gap-sm cursor-pointer" style="border-color:#F97066;">
           <span class="material-symbols-outlined text-5xl text-coral">image_search</span>
-          <p class="text-body-lg text-on-surface">Drop image here or click to upload</p>
-          <p class="text-body-md text-on-surface-variant">PNG, JPG supported</p>
-          <input type="file" id="image-file-input" accept="image/*" class="hidden">
+          <p class="text-body-lg text-on-surface">Drop image(s) here or click to upload</p>
+          <p class="text-body-md text-on-surface-variant">PNG, JPG supported — you can select more than one</p>
+          <input type="file" id="image-file-input" accept="image/*" multiple class="hidden">
         </div>
 
         <div id="image-populated-state" class="hidden flex-1 flex-col gap-lg">
-          <div class="glass-panel rounded-xl flex-1 min-h-[300px] flex items-center justify-center overflow-hidden border border-outline-variant relative">
-            <div class="absolute top-md left-md">
-              <div class="bg-coral/10 border border-coral/40 text-coral px-sm py-xs rounded-lg flex items-center gap-xs">
-                <span class="material-symbols-outlined text-[16px]">visibility</span>
-                <span class="text-label-caps">Analyzing image</span>
-              </div>
-            </div>
-            <img id="image-preview" class="max-w-[90%] max-h-[90%] object-contain" src="" alt="Uploaded image preview">
+          <div class="flex items-center justify-between">
+            <span class="text-label-caps text-on-surface-variant" id="image-count-label">1 image attached</span>
+            <button id="image-add-more-btn" type="button" class="text-label-caps text-coral hover:underline flex items-center gap-1">
+              <span class="material-symbols-outlined text-[16px]">add_photo_alternate</span> Add more
+            </button>
           </div>
+          <div id="image-gallery" class="flex-1 grid grid-cols-2 md:grid-cols-3 gap-md overflow-y-auto custom-scrollbar min-h-[300px] content-start"></div>
         </div>
       </div>
 
@@ -344,6 +342,50 @@
     </section>
 
   </main>
+</div>
+
+<!-- ============================== ONBOARDING MODAL ============================== -->
+<div id="onboarding-overlay" class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/60 backdrop-blur-sm p-lg">
+  <div id="onboarding-modal" class="onboarding-modal-anim bg-surface-container-low border border-outline-variant rounded-xl max-w-lg w-full p-xl space-y-lg shadow-2xl">
+    <div class="space-y-xs">
+      <h2 class="font-headline-md text-headline-lg text-primary">Welcome to Multimodal Q&amp;A Pro</h2>
+      <p class="text-on-surface-variant text-body-md">Quick guide to which tab to use, and what happens to your files.</p>
+    </div>
+    <div class="space-y-md">
+      <div class="flex gap-sm items-start">
+        <span class="material-symbols-outlined text-primary mt-0.5">forum</span>
+        <div>
+          <p class="font-bold text-on-surface text-body-lg">Hybrid Chat</p>
+          <p class="text-on-surface-variant text-body-md">For general questions, or questions that combine your uploaded documents and/or images with live web search. No upload needed here.</p>
+        </div>
+      </div>
+      <div class="flex gap-sm items-start">
+        <span class="material-symbols-outlined text-cobalt mt-0.5">description</span>
+        <div>
+          <p class="font-bold text-on-surface text-body-lg">Document Q&amp;A</p>
+          <p class="text-on-surface-variant text-body-md">Upload one or more PDFs and ask questions grounded in them. If your document is outdated and the question needs today's value, it will also check the live web.</p>
+        </div>
+      </div>
+      <div class="flex gap-sm items-start">
+        <span class="material-symbols-outlined text-coral mt-0.5">camera</span>
+        <div>
+          <p class="font-bold text-on-surface text-body-lg">Image Studio</p>
+          <p class="text-on-surface-variant text-body-md">Upload one or more images and ask questions about them — with the option to cross-reference your documents or the live web too.</p>
+        </div>
+      </div>
+      <div class="flex gap-sm items-start pt-sm border-t border-outline-variant/50">
+        <span class="material-symbols-outlined text-amber mt-0.5">restart_alt</span>
+        <p class="text-on-surface-variant text-body-md">Everything you upload is scoped strictly to this browser session — refreshing the page starts a completely fresh session with zero files.</p>
+      </div>
+    </div>
+    <div class="flex items-center justify-between pt-sm">
+      <label class="flex items-center gap-xs text-body-md text-on-surface-variant cursor-pointer">
+        <input type="checkbox" id="onboarding-dont-show" class="rounded">
+        Don't show this again
+      </label>
+      <button id="onboarding-dismiss-btn" class="bg-primary text-on-primary px-lg py-sm rounded-lg font-label-caps text-label-caps hover:opacity-90 active:scale-95 transition-all">Got it</button>
+    </div>
+  </div>
 </div>
 
 <script src="app.js"></script>

@@ -24,6 +24,87 @@ let uploadedDocCount = 0;
 let uploadedImageCount = 0;
 
 // ---------------------------------------------------------------------------
+// Onboarding modal — explains what each tab is for and that uploads are
+// strictly per-session. Shown on every fresh page load (a refresh is a brand
+// new session, per the cleanup logic below) unless the person has checked
+// "Don't show this again", which is remembered across sessions via
+// localStorage (a real persistent preference, not session-scoped data).
+// ---------------------------------------------------------------------------
+function initOnboarding() {
+  const overlay = document.getElementById("onboarding-overlay");
+  const dismissBtn = document.getElementById("onboarding-dismiss-btn");
+  const dontShowCheckbox = document.getElementById("onboarding-dont-show");
+  if (!overlay || !dismissBtn) return;
+
+  let suppressed = false;
+  try {
+    suppressed = localStorage.getItem("mqa_onboarding_dismissed") === "1";
+  } catch (e) {
+    suppressed = false; // localStorage unavailable (e.g. private mode) — just show it
+  }
+
+  if (!suppressed) {
+    overlay.classList.remove("hidden");
+    overlay.classList.add("flex");
+  }
+
+  dismissBtn.addEventListener("click", () => {
+    overlay.classList.add("hidden");
+    overlay.classList.remove("flex");
+    if (dontShowCheckbox && dontShowCheckbox.checked) {
+      try {
+        localStorage.setItem("mqa_onboarding_dismissed", "1");
+      } catch (e) {
+        /* ignore — non-fatal if storage isn't available */
+      }
+    }
+  });
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) dismissBtn.click();
+  });
+}
+initOnboarding();
+
+// ---------------------------------------------------------------------------
+// Session cleanup — a page refresh/close gets a brand-new sessionId (see the
+// `let sessionId = ...` above, re-run on every load), so the OLD session's
+// uploaded chunks/images need to actually be deleted server-side, not just
+// left orphaned and unreachable. `pagehide` fires reliably on refresh, tab
+// close, and navigation; fetch's `keepalive` flag lets the request survive
+// the page unloading.
+// ---------------------------------------------------------------------------
+function endCurrentSession() {
+  try {
+    fetch(`${API_BASE}/api/session/${sessionId}`, { method: "DELETE", keepalive: true });
+  } catch (e) {
+    // best-effort only — nothing meaningful to do if this fails on unload
+  }
+}
+window.addEventListener("pagehide", endCurrentSession);
+
+// ---------------------------------------------------------------------------
+// Enter-to-send / Ctrl+Enter-for-newline on every chat input in the app.
+// Plain Enter submits the message (matches most chat UIs); Ctrl+Enter (or
+// Cmd+Enter on Mac) inserts a newline instead of sending.
+// ---------------------------------------------------------------------------
+function wireEnterToSend(textareaId, sendButtonId) {
+  const textarea = document.getElementById(textareaId);
+  const sendButton = document.getElementById(sendButtonId);
+  if (!textarea || !sendButton) return;
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl/Cmd+Enter -> newline. Textareas do this natively already, so
+      // just let the default happen (no preventDefault).
+      return;
+    }
+    // Plain Enter -> send, and don't also insert a newline into the box.
+    e.preventDefault();
+    sendButton.click();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tab switching
 // ---------------------------------------------------------------------------
 const TAB_IDS = ["hybrid-chat", "document-qa", "image-studio"];
@@ -339,12 +420,11 @@ pdfDropzone.addEventListener("click", () => pdfFileInput.click());
   pdfDropzone.addEventListener(evt, (e) => { e.preventDefault(); pdfDropzone.classList.remove("drag-over"); })
 );
 pdfDropzone.addEventListener("drop", (e) => {
-  const file = e.dataTransfer.files[0];
-  if (file) handlePdfUpload(file);
+  Array.from(e.dataTransfer.files || []).forEach((file) => handlePdfUpload(file));
 });
 pdfFileInput.addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (file) handlePdfUpload(file);
+  Array.from(e.target.files || []).forEach((file) => handlePdfUpload(file));
+  pdfFileInput.value = ""; // allow re-selecting the same file(s) later
 });
 
 function handlePdfUpload(file) {
@@ -423,40 +503,60 @@ document.getElementById("docqa-chat-send").addEventListener("click", async () =>
 const imageEmptyState = document.getElementById("image-empty-state");
 const imagePopulatedState = document.getElementById("image-populated-state");
 const imageFileInput = document.getElementById("image-file-input");
-const imagePreview = document.getElementById("image-preview");
+const imageGallery = document.getElementById("image-gallery");
+const imageCountLabel = document.getElementById("image-count-label");
+const imageAddMoreBtn = document.getElementById("image-add-more-btn");
 
 imageEmptyState.addEventListener("click", () => imageFileInput.click());
+if (imageAddMoreBtn) imageAddMoreBtn.addEventListener("click", () => imageFileInput.click());
 imageFileInput.addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (file) handleImageUpload(file);
+  Array.from(e.target.files || []).forEach((file) => handleImageUpload(file));
+  imageFileInput.value = ""; // allow re-selecting the same file(s) later
 });
 
 function handleImageUpload(file) {
   const url = URL.createObjectURL(file);
-  imagePreview.src = url;
   imageEmptyState.classList.add("hidden");
   imagePopulatedState.classList.remove("hidden");
   imagePopulatedState.classList.add("flex");
-  document.getElementById("image-chat-thread").innerHTML = "";
-  uploadImage(file);
+
+  const thumb = document.createElement("div");
+  thumb.className = "image-gallery-thumb";
+  thumb.innerHTML = `
+    <img src="${url}" alt="${escapeHtml(file.name)}">
+    <span class="thumb-status">Uploading…</span>`;
+  imageGallery.appendChild(thumb);
+
+  uploadImage(file, thumb);
 }
 
-async function uploadImage(file) {
+async function uploadImage(file, thumb) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("session_id", sessionId); // required Form(...) field on Vanshi's endpoint — was missing, would 422
+  const statusEl = thumb.querySelector(".thumb-status");
   try {
     const res = await fetch(`${API_BASE}/api/upload/image`, { method: "POST", body: formData });
     if (!res.ok) throw new Error(String(res.status));
-    // main.py's _SESSION_IMAGES keeps only the most recent image per session
-    // (a new upload replaces the old one, it doesn't add to it), so this
-    // count is really "is an image currently attached" — cap it at 1 to
-    // match that backend behavior rather than counting every upload ever made.
-    uploadedImageCount = 1;
+    const data = await res.json();
+    // main.py now stores every image uploaded in the session (not just the
+    // most recent one), so image_count reflects the real running total.
+    uploadedImageCount = data.image_count ?? uploadedImageCount + 1;
+    if (statusEl) statusEl.remove();
+    updateImageCountLabel();
     updateHybridSourcesHint();
   } catch (e) {
     console.warn("[demo mode] /api/upload/image unavailable:", e.message);
+    if (statusEl) statusEl.textContent = "Demo mode";
+    uploadedImageCount += 1;
+    updateImageCountLabel();
+    updateHybridSourcesHint();
   }
+}
+
+function updateImageCountLabel() {
+  if (!imageCountLabel) return;
+  imageCountLabel.textContent = `${uploadedImageCount} image${uploadedImageCount === 1 ? "" : "s"} attached`;
 }
 
 document.getElementById("image-chat-send").addEventListener("click", async () => {
@@ -615,3 +715,9 @@ function beginLiveTrace(threadId, query, onFinalAnswer) {
   return wrapper;
 }
 // connectTraceStream((traceEvent) => { /* render real tool-call events here */ });
+
+// Wire Enter-to-send / Ctrl+Enter-newline for every chat input in the app.
+wireEnterToSend("hybrid-chat-input", "hybrid-chat-send");
+wireEnterToSend("report-chat-input", "report-chat-send");
+wireEnterToSend("docqa-chat-input", "docqa-chat-send");
+wireEnterToSend("image-chat-input", "image-chat-send");

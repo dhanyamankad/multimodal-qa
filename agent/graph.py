@@ -26,9 +26,11 @@ suggestions, and you must not substitute your own judgment for them:
 
 1. IMAGE HANDLING: if an image was uploaded in the current turn, call \
    describe_image before relying on any other tool for information that \
-   depends on the image's content. If the question also needs documents or \
-   the web to cross-reference what's in the image, call those tools AFTER \
-   describe_image, in that order.
+   depends on the image's content. If multiple images were uploaded in this \
+   session, call describe_image once per image path that's relevant to the \
+   question — not necessarily every uploaded image. If the question also \
+   needs documents or the web to cross-reference what's in the image(s), \
+   call those tools AFTER describe_image, in that order.
 
 2. DOCUMENT-FIRST: if the query is plausibly answerable from the user's \
    uploaded documents, call search_documents FIRST, before search_web. Never \
