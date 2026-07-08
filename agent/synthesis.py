@@ -5,8 +5,8 @@ either a Chat Mode answer or a Report Mode structured JSON document.
 Chat Mode: the agent's own final message IS the answer. No extra LLM call.
 Report Mode: a dedicated second-pass LLM call, fed the ACTUAL tool outputs
 collected from the run (not re-derived from the chat answer), so every
-`findings` entry traces to something real (Section 3.5) and `conflicts` comes
-from an explicit comparison step rather than implicit judgment (Section 16).
+`findings` entry traces to something real and `conflicts` comes
+from an explicit comparison step rather than implicit judgment.
 """
 
 from __future__ import annotations
@@ -19,12 +19,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_groq import ChatGroq
 
-# Defensive second layer: gpt-oss models are trained on OpenAI's Harmony
-# "browser" tool, which cites with markers like `【search_web†L0-L5】` or
-# `[search_web†L0-L5]`. Our system prompt (agent/graph.py rule 6) tells the
-# model never to emit these, but prompts aren't guaranteed — this strips any
-# that slip through so they never reach the user, regardless of bracket
-# style. Matches "<name>†L<digits>[-L<digits>]" inside [...] or 【...】.
+
 _CITATION_MARKER_RE = re.compile(
     r"[\[【][^\[\]【】]*†\s*L\d+(?:-\s*L?\d+)?[\]】]",
     flags=re.IGNORECASE,
@@ -39,7 +34,7 @@ def strip_citation_artifacts(text: str) -> str:
     if not text:
         return text
     cleaned = _CITATION_MARKER_RE.sub("", text)
-    # Collapse any double-spacing left behind by a removed inline marker.
+    
     return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 REASONING_MODEL = "llama-3.3-70b-versatile"
@@ -152,8 +147,7 @@ def _parse_json_safely(raw: str) -> dict[str, Any]:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # Fail closed with a clearly-flagged, still-valid-shape report rather
-        # than crashing the endpoint or silently returning malformed JSON.
+        
         return {
             "findings": [],
             "conflicts": [],

@@ -8,12 +8,10 @@ exists for a query: below-threshold results are treated as "not found"
 and MUST NOT be forced into an answer. This is what makes:
   - PS5 test scenario 1 (pure doc question -> only search_documents fires)
   - PS4-style scenario 6/7 (doc-only vs. no-answer-in-docs)
-pass cleanly, since the agent's routing logic (owned by Vanshi, in
-agent/tools.py / agent/graph.py) depends on getting an honest signal here
+pass cleanly, since the agent's routing logic depends on getting an honest signal here
 rather than a chunk that's technically returned but semantically irrelevant.
 
-INTERFACE CONTRACT (this is what Vanshi's `search_documents` tool consumes --
-do not change this shape without syncing with her first):
+INTERFACE CONTRACT
 
     retrieve(query: str, top_k: int = 4) -> RetrievalResponse
 
@@ -78,7 +76,7 @@ class RetrievalResponse:
         """
         Flatten chunks into a single string suitable for stuffing into an
         LLM prompt, each chunk tagged with its citation so the synthesis
-        layer (Vanshi's agent/synthesis.py) can attribute claims correctly
+        layer (agent/synthesis.py) can attribute claims correctly
         in both Chat Mode and Report Mode.
         """
         if not self.found:
@@ -170,7 +168,7 @@ def retrieve_chunks(
     query: str, threshold: float = SIMILARITY_THRESHOLD, session_id: Optional[str] = None
 ) -> List[dict]:
     """
-    Adapter for agent/tools.py (Vanshi's module), which expects:
+    Adapter for agent/tools.py, which expects:
         retrieve_chunks(query, threshold, session_id) -> list[dict]
         each dict: {"text": str, "filename": str, "page": int, "score": float}
 

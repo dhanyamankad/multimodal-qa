@@ -3,7 +3,7 @@ rag/ingest.py
 
 PDF ingestion pipeline for Multimodal Q&A Pro.
 
-Flow (per PRD Section 4 / Section 6.1):
+Flow :
     PDF upload
       -> extract text WITH page numbers (pypdf)
       -> for any page with no/near-no extractable text, render that page to
@@ -27,10 +27,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
-# stage, current, total, detail -> None. Called throughout ingest_pdf() so
-# callers (main.py) can surface real progress instead of an indeterminate
-# spinner. Stages: "text", "ocr_start", "ocr_done", "ocr_failed", "chunking",
-# "embedding", "done".
+
 ProgressCallback = Callable[[str, int, int, str], None]
 
 from pypdf import PdfReader
@@ -48,44 +45,19 @@ from agent.vision import vision_call
 
 logger = logging.getLogger("rag.ingest")
 
-# A page with fewer than this many extracted characters is treated as
-# "effectively no text layer" and sent through OCR instead. Not 0, because
-# pypdf sometimes pulls a stray header/footer/page-number off an otherwise
-# fully-image slide, which would wrongly skip OCR for real content.
+
 OCR_TEXT_THRESHOLD_CHARS = 20
 
-# Resolution multiplier for rendering a PDF page to an image before OCR.
-# 1.0 = 72 DPI (PDF native), which is too blurry for small slide text to
-# OCR reliably; 2.5 ~= 180 DPI, a reasonable quality/size/latency tradeoff.
-# If the resulting JPEG is still too large at this zoom (see
-# OCR_MAX_B64_BYTES below), we step down through these zoom levels before
-# giving up.
+
 OCR_RENDER_ZOOM_LEVELS = (2.5, 1.8, 1.3)
 
 # JPEG quality levels tried at each zoom level, highest quality first.
 OCR_JPEG_QUALITIES = (85, 70, 55, 40)
 
-# Groq's meta-llama/llama-4-scout-17b-16e-instruct enforces a hard 4MB limit
-# on base64-encoded image request bodies (console.groq.com/docs/vision,
-# "Request Size Limit (Base64 Encoded Images)") -- this is what produced the
-# 413 "Request Entity Too Large" errors. A full page rendered at 2.5x zoom
-# (~180 DPI) as PNG easily exceeds that for image-heavy slides (photos,
-# gradients, embedded charts), since PNG doesn't compress that kind of
-# content well. JPEG does much better, so we render as JPEG and, if still
-# too big, step down quality and then resolution until the base64 payload
-# comfortably fits. Target is 3.8MB base64 (~2.85MB raw), leaving headroom
-# under the 4MB cap for the rest of the JSON request body.
+
 OCR_MAX_B64_BYTES = 3_800_000
 
-# SEPARATE from the byte-size cap above: Groq's vision pipeline also rejects
-# images over ~33.2 megapixels ("images can contain at most 33177600 pixels"
-# -- confirmed by the 400 errors seen in testing on a slide deck with
-# unusually large source page dimensions). JPEG quality does NOT reduce
-# pixel count, only file size, so the byte-size stepdown loop alone cannot
-# fix this -- a highly-compressed but still-oversized-in-pixels JPEG will
-# still get a 400. This has to be enforced as a hard cap on render zoom,
-# computed per-page from its actual point dimensions, before quality is
-# even considered.
+
 OCR_MAX_PIXELS = 33_000_000  # stay a hair under Groq's exact 33,177,600 cap
 
 OCR_PROMPT = (
@@ -188,11 +160,7 @@ class DocumentIngestor:
             page = doc[page_number - 1]
             page_w, page_h = page.rect.width, page.rect.height  # points, 72/inch
 
-            # Highest zoom that keeps this specific page's rendered pixel
-            # count under the cap. Every configured zoom level is clamped
-            # to this ceiling -- for most normal pages the ceiling is above
-            # 2.5 and changes nothing; for oversized pages (like the one
-            # that triggered the 400s) it pulls every candidate down.
+            
             max_zoom_for_pixels = (OCR_MAX_PIXELS / (page_w * page_h)) ** 0.5
 
             zoom_candidates = sorted(
@@ -214,7 +182,7 @@ class DocumentIngestor:
                     estimated_b64_len = (len(data) + 2) // 3 * 4
                     if estimated_b64_len <= OCR_MAX_B64_BYTES:
                         return data
-            return smallest  # best effort; caller/Groq will reject if still too big
+            return smallest  
         finally:
             doc.close()
 
@@ -265,12 +233,7 @@ class DocumentIngestor:
                     progress_cb("text", i, total_pages, f"page {i}/{total_pages}")
                 continue
 
-            # This is a real network round-trip to Groq and can take
-            # several seconds per page; log before/after so a multi-page
-            # OCR run shows visible progress in the terminal instead of
-            # long silent gaps that look identical to a hang. See also the
-            # 60s client timeout in agent/vision.py, which bounds how long
-            # any single page can block this loop.
+            
             logger.info("OCR: page %d/%d of '%s' -- starting", i, total_pages, pdf_path)
             if progress_cb:
                 progress_cb("ocr_start", i, total_pages, f"OCR: page {i}/{total_pages}")
@@ -317,10 +280,7 @@ class DocumentIngestor:
         for page in pages:
             page_chunks = self._splitter.split_text(page.text)
             for idx, chunk in enumerate(page_chunks):
-                # session_id folded into the id too, so the same PDF
-                # re-uploaded in a different session gets distinct chunk ids
-                # instead of upserting over (and leaking into) another
-                # session's copy.
+                
                 chunk_id = hashlib.sha1(
                     f"{session_id}:{filename}:{page.page_number}:{idx}:{chunk[:50]}".encode("utf-8")
                 ).hexdigest()
@@ -421,9 +381,7 @@ class DocumentIngestor:
         self._collection.delete(where={"session_id": session_id})
 
 
-# Module-level singleton so main.py and retrieve.py share one Chroma client
-# instead of each opening their own (avoids file-lock contention on the
-# persisted directory).
+
 _ingestor: Optional[DocumentIngestor] = None
 
 
@@ -435,7 +393,7 @@ def get_ingestor() -> DocumentIngestor:
 
 def ingest_pdf(pdf_path: str, session_id: Optional[str] = None) -> int:
     """
-    Adapter for main.py (Vanshi's module), which expects:
+    Adapter for main.py, which expects:
         ingest_pdf(pdf_path, session_id=...) -> int   (chunk count)
 
     main.py saves uploads as "{session_id}_{original_filename}" (see

@@ -4,7 +4,7 @@
 
    IMPORTANT — Section 16 compliance:
    This file NEVER fabricates a reasoning trace and presents it as if it
-   came from a real agent.stream() run. Where Vanshi's backend isn't
+   came from a real agent.stream() run. Where backend isn't
    reachable yet, functions fall back to clearly-labeled demo content and
    the "Demo Mode" badge in the header stays visible. The moment a real
    fetch()/EventSource call succeeds, demo mode turns off and only real
@@ -241,7 +241,7 @@ function updateHybridSourcesHint() {
 
 // ---------------------------------------------------------------------------
 // Backend reachability check — determines whether the Demo Mode badge shows.
-// Vanshi's real endpoints (Section 7): POST /api/chat, /api/chat/report,
+// POST /api/chat, /api/chat/report,
 // /api/upload/pdf, /api/upload/image, GET /api/stream/{session_id}
 // ---------------------------------------------------------------------------
 async function checkBackend() {
@@ -385,7 +385,7 @@ async function fetchReport(message) {
   }
 }
 
-// Vanshi's /api/chat/report returns { session_id, report: { findings, conflicts,
+//  /api/chat/report returns { session_id, report: { findings, conflicts,
 // conclusion } } — no title/subtitle field (confirmed directly against her
 // main.py + synthesis.py; it was never part of her schema). renderReport's UI
 // needs those two fields, so we generate them client-side rather than asking
@@ -615,7 +615,7 @@ function connectUploadProgress(uploadId, card) {
 async function uploadPdf(file, card) {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("session_id", sessionId); // required Form(...) field on Vanshi's endpoint — was missing, would 422
+  formData.append("session_id", sessionId); 
   const uploadId =
     (crypto.randomUUID && crypto.randomUUID()) || `upload-${Math.random().toString(36).slice(2)}`;
   formData.append("upload_id", uploadId);
@@ -722,7 +722,7 @@ function handleImageUpload(file) {
 async function uploadImage(file, thumb) {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("session_id", sessionId); // required Form(...) field on Vanshi's endpoint — was missing, would 422
+  formData.append("session_id", sessionId); 
   const statusEl = thumb.querySelector(".thumb-status");
   beginIndexing();
   try {
@@ -789,8 +789,8 @@ document.getElementById("image-chat-send").addEventListener("click", async () =>
 // ---------------------------------------------------------------------------
 function connectTraceStream(query, onEvent, onError, extraParams = {}) {
   try {
-    // Vanshi's endpoint requires session_id in the path AND query as a
-    // required query string param (confirmed directly against her main.py) —
+    
+    // required query string param (
     // omitting it 422s.
     const params = new URLSearchParams({ query, ...extraParams });
     const url = `${API_BASE}/api/stream/${sessionId}?${params.toString()}`;

@@ -3,10 +3,10 @@ The three tools available to the agent: search_documents, search_web, describe_i
 
 Routing discipline (who calls what, when) lives in the system prompt in
 agent/graph.py, NOT here — this file only implements what each tool actually
-does once called. See PRD Section 6.5 for the routing rules themselves.
+does once called.
 
 Every tool is wrapped in @safe_call so a failure becomes a clean fallback
-string instead of an unhandled exception (Section 6.4).
+string instead of an unhandled exception.
 """
 
 from __future__ import annotations
@@ -19,29 +19,15 @@ from agent.safe_call import safe_call
 from agent.session_context import get_session_id, is_allowed_image
 from agent.vision import vision_call
 
-# --- Interface with Dhanya's rag/retrieve.py -------------------------------
-# EXPECTED CONTRACT (flagged in PRD Section 4 as an open interface item):
-#   retrieve_chunks(query: str, threshold: float) -> list[dict]
-#   each dict: {"text": str, "filename": str, "page": int, "score": float}
-#   only chunks with score >= threshold are returned (the "above-threshold"
-#   filtering happens on Dhanya's side in rag/retrieve.py, not here).
-# rag/retrieve.py is currently an empty stub (owned by Dhanya). Importing it
-# will fail until she fills it in, so we degrade to a clearly-labeled inline
-# placeholder for local dev/testing rather than crashing at import time.
+
 try:
     from rag.retrieve import retrieve_chunks, SIMILARITY_THRESHOLD as CHUNK_CONFIDENCE_THRESHOLD  # type: ignore
 except Exception:  # noqa: BLE001
-    # CHUNK_CONFIDENCE_THRESHOLD fallback below is NOT a guess — it mirrors
-    # Dhanya's calibrated SIMILARITY_THRESHOLD in rag/retrieve.py (0.08,
-    # picked from real testing: genuinely relevant chunks scored ~0.14-0.17,
-    # irrelevant ones scored negative). The old 0.35 here would reject every
-    # real answer even once retrieve.py exists, so this must stay in sync —
-    # only used at all if the import above fails (rag/retrieve.py missing).
+    
     CHUNK_CONFIDENCE_THRESHOLD = 0.08
 
     def retrieve_chunks(query: str, threshold: float = CHUNK_CONFIDENCE_THRESHOLD, session_id=None):
-        """TEMPORARY PLACEHOLDER — replace by importing Dhanya's real
-        rag/retrieve.py once it's implemented. Returns no chunks, which makes
+        """Returns no chunks, which makes
         search_documents correctly report NOT_FOUND so the router falls back
         to search_web, keeping the agent usable end-to-end before RAG lands."""
         return []
@@ -57,10 +43,7 @@ def search_documents(query: str) -> str:
     above-confidence-threshold chunks with page-level source metadata for
     citation, or an explicit NOT_FOUND signal if nothing cleared the bar.
     """
-    # session_id comes from the contextvar set by main.py for this request,
-    # NEVER from the LLM — see agent/session_context.py for why. This is
-    # what makes each session's document Q&A strictly scoped to only the
-    # files that session itself uploaded.
+    
     chunks = retrieve_chunks(
         query, threshold=CHUNK_CONFIDENCE_THRESHOLD, session_id=get_session_id()
     )
@@ -111,10 +94,7 @@ def describe_image(image_path: str, question: str = "Describe this image in deta
     image path that's relevant to the question (the available paths are
     listed in the injected session context in the user message).
     """
-    # image_path is an LLM-supplied argument. Verify it's actually one of
-    # this session's own uploads before ever touching the filesystem, so a
-    # hallucinated or injected path can't read another session's image (or
-    # any other file on disk).
+    
     if not is_allowed_image(image_path):
         return (
             "This image path is not part of the current session's uploads, "
@@ -124,7 +104,5 @@ def describe_image(image_path: str, question: str = "Describe this image in deta
     with open(image_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    # vision_call already tries VISION_MODEL_PRIMARY then VISION_MODEL_FALLBACK
-    # internally (see agent/vision.py); if both fail it raises, and the outer
-    # @safe_call turns that into a clean fallback string.
+    
     return vision_call(image_b64, question)

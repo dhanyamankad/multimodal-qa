@@ -23,10 +23,7 @@ from typing import Optional
 _current_session_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "current_session_id", default=None
 )
-# The set of image file paths this session itself uploaded. describe_image
-# checks against this before opening any path the LLM passes it, so a
-# hallucinated or injected path can never read another session's (or the
-# server's) files.
+
 _current_allowed_images: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
     "current_allowed_images", default=frozenset()
 )

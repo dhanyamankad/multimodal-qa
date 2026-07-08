@@ -1,7 +1,7 @@
 """
-The single LangGraph create_react_agent that IS the routing brain (PRD Section
-4/6). One agent, three tools, an explicit system prompt that encodes routing
-rules directly rather than trusting implicit model judgment (Section 6.5).
+The single LangGraph create_react_agent that IS the routing brain.
+One agent, three tools, an explicit system prompt that encodes routing
+rules directly rather than trusting implicit model judgment
 """
 
 from __future__ import annotations
@@ -13,10 +13,9 @@ from langgraph.prebuilt import create_react_agent
 
 from agent.tools import describe_image, search_documents, search_web
 
-# Confirmed live on Groq as of this build's pre-flight check (PRD Section 3.0).
 REASONING_MODEL = "openai/gpt-oss-120b"
 
-# PS5 hard requirement — do NOT change without sign-off (PRD Section 5).
+
 RECURSION_LIMIT = 12
 
 SYSTEM_PROMPT = """You are the routing and reasoning core of a multimodal Q&A \
@@ -99,9 +98,7 @@ def build_agent():
     return create_react_agent(llm, tools, prompt=SYSTEM_PROMPT)
 
 
-# Built once at import time and reused across requests — a fresh agent per
-# request would work too, but rebuilding create_react_agent per call is wasted
-# overhead since the graph shape never changes between requests.
+
 AGENT = build_agent()
 
 

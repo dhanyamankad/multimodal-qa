@@ -121,8 +121,8 @@ def _build_input_messages(req: ChatRequest) -> list[dict]:
 
     Also translates the frontend's `scope` and `cross_reference_documents`
     fields into explicit instructions in the message content. The agent's
-    routing rules live in the system prompt in agent/graph.py (Vanshi's
-    module), not here, so this is the interface-level way to influence
+    routing rules live in the system prompt in agent/graph.py 
+    , not here, so this is the interface-level way to influence
     per-request routing without changing that file: the same pattern already
     used for the image-path context below.
     """
@@ -233,7 +233,7 @@ async def upload_pdf(
     file: UploadFile = File(...),
     upload_id: Optional[str] = Form(None),
 ):
-    """Hands off to Dhanya's rag/ingest.py, returns confirmation + chunk count.
+    """Hands off to rag/ingest.py, returns confirmation + chunk count.
 
     upload_id (optional, client-generated) namespaces the real-time progress
     exposed at GET /api/upload/progress/{upload_id}. If the client doesn't
@@ -249,7 +249,7 @@ async def upload_pdf(
         f.write(contents)
 
     try:
-        from rag.ingest import ingest_pdf_result  # Dhanya's owned module
+        from rag.ingest import ingest_pdf_result  
     except Exception as exc:
         # rag/ingest.py is currently an empty stub — fail the request clearly
         # rather than pretending ingestion succeeded.
