@@ -15,6 +15,13 @@ const API_BASE = ""; // same-origin, per Section 7 — FastAPI serves these stat
 let backendReachable = false;
 let sessionId = "session-" + Math.random().toString(36).slice(2, 10);
 let currentHybridMode = "chat"; 
+// Declared here (not next to their upload handlers further down) so
+// updateHybridSourcesHint() can safely reference them the moment the page
+// loads (setActiveTab("hybrid-chat") below runs before this file reaches the
+// Document Q&A / Image Studio sections) — referencing a `let` before its own
+// declaration throws, so these can't stay declared further down.
+let uploadedDocCount = 0;
+let uploadedImageCount = 0;
 
 // ---------------------------------------------------------------------------
 // Tab switching
@@ -36,12 +43,36 @@ function setActiveTab(tabId) {
       navBtn.classList.add("text-on-surface-variant", "border-transparent");
     }
   });
+  if (typeof updateHybridSourcesHint === "function") updateHybridSourcesHint();
 }
 
 document.querySelectorAll(".nav-tab-link").forEach((btn) => {
   btn.addEventListener("click", () => setActiveTab(btn.dataset.tabTarget));
 });
 setActiveTab("hybrid-chat");
+
+// ---------------------------------------------------------------------------
+// Hybrid Chat sources hint — Hybrid Chat has no upload UI of its own, so this
+// is the only feedback a user gets, inside that tab, about whether anything
+// uploaded via Document Q&A / Image Studio is actually attached to their
+// session (uploads carry over automatically — same shared `sessionId` — this
+// just makes that visible instead of silent).
+// ---------------------------------------------------------------------------
+function updateHybridSourcesHint() {
+  const statusEl = document.getElementById("hybrid-sources-status");
+  if (!statusEl) return;
+  const docCount = typeof uploadedDocCount !== "undefined" ? uploadedDocCount : 0;
+  const imgCount = typeof uploadedImageCount !== "undefined" ? uploadedImageCount : 0;
+
+  if (docCount === 0 && imgCount === 0) {
+    statusEl.textContent = "No documents or images attached yet —";
+    return;
+  }
+  const parts = [];
+  if (docCount > 0) parts.push(`${docCount} document${docCount === 1 ? "" : "s"}`);
+  if (imgCount > 0) parts.push(`${imgCount} image${imgCount === 1 ? "" : "s"}`);
+  statusEl.textContent = `Attached: ${parts.join(" · ")} — also try`;
+}
 
 // ---------------------------------------------------------------------------
 // Backend reachability check — determines whether the Demo Mode badge shows.
@@ -299,7 +330,6 @@ const pdfFileInput = document.getElementById("pdf-file-input");
 const docList = document.getElementById("doc-list");
 const docEmptyState = document.getElementById("doc-empty-state");
 const docCountLabel = document.getElementById("doc-count-label");
-let uploadedDocCount = 0;
 
 pdfDropzone.addEventListener("click", () => pdfFileInput.click());
 ["dragover", "dragenter"].forEach((evt) =>
@@ -361,6 +391,7 @@ function markDocIndexed(card, statusText) {
   document.getElementById("docqa-indexing-status").textContent = "INDEXING: INACTIVE";
   document.getElementById("docqa-ready-state").classList.add("hidden");
   document.getElementById("docqa-chat-thread").classList.remove("hidden");
+  updateHybridSourcesHint();
 }
 
 document.getElementById("docqa-chat-send").addEventListener("click", async () => {
@@ -417,6 +448,12 @@ async function uploadImage(file) {
   try {
     const res = await fetch(`${API_BASE}/api/upload/image`, { method: "POST", body: formData });
     if (!res.ok) throw new Error(String(res.status));
+    // main.py's _SESSION_IMAGES keeps only the most recent image per session
+    // (a new upload replaces the old one, it doesn't add to it), so this
+    // count is really "is an image currently attached" — cap it at 1 to
+    // match that backend behavior rather than counting every upload ever made.
+    uploadedImageCount = 1;
+    updateHybridSourcesHint();
   } catch (e) {
     console.warn("[demo mode] /api/upload/image unavailable:", e.message);
   }

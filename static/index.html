@@ -94,6 +94,22 @@
         </div>
       </div>
 
+      <!-- Persistent sources hint — common to Chat Mode and Report Mode, since
+           Hybrid Chat has no upload UI of its own (by design: it's the
+           combine-everything tab, not a third upload flow). Docs/images
+           uploaded via Document Q&A / Image Studio carry over here
+           automatically (shared sessionId) — this just tells the user that,
+           and shows what's currently attached. -->
+      <div id="hybrid-sources-hint" class="px-lg py-sm border-b border-outline-variant bg-surface-container-low/40 flex items-center gap-xs shrink-0">
+        <span class="material-symbols-outlined text-[16px] text-on-surface-variant">info</span>
+        <p class="text-body-sm text-on-surface-variant">
+          <span id="hybrid-sources-status">No documents or images attached yet —</span>
+          upload a PDF in <button type="button" class="nav-tab-link text-primary hover:underline" data-tab-target="document-qa">Document&nbsp;Q&amp;A</button>
+          or an image in <button type="button" class="nav-tab-link text-primary hover:underline" data-tab-target="image-studio">Image&nbsp;Studio</button>
+          — they'll be available here too, combined with live web search.
+        </p>
+      </div>
+
       <!-- ---- CHAT MODE VIEW ---- -->
       <div id="chat-mode-view" class="flex-1 flex flex-col overflow-hidden relative">
         <div id="chat-thread" class="flex-1 overflow-y-auto p-lg space-y-lg custom-scrollbar pb-40">
@@ -101,7 +117,7 @@
             <div class="max-w-md text-center space-y-md">
               <span class="material-symbols-outlined text-5xl text-on-surface-variant">forum</span>
               <h3 class="font-headline-md text-headline-md text-on-surface">Start a conversation</h3>
-              <p class="text-on-surface-variant">Ask anything — the agent routes across your documents, the live web, and images as needed.</p>
+              <p class="text-on-surface-variant">This is where sources come together — ask something that needs your uploaded documents and/or images combined with the live web. For a single PDF or image on its own, Document&nbsp;Q&amp;A and Image&nbsp;Studio give you a more focused view.</p>
             </div>
           </div>
         </div>
