@@ -51,7 +51,36 @@ OCR_TEXT_THRESHOLD_CHARS = 20
 # Resolution multiplier for rendering a PDF page to an image before OCR.
 # 1.0 = 72 DPI (PDF native), which is too blurry for small slide text to
 # OCR reliably; 2.5 ~= 180 DPI, a reasonable quality/size/latency tradeoff.
-OCR_RENDER_ZOOM = 2.5
+# If the resulting JPEG is still too large at this zoom (see
+# OCR_MAX_B64_BYTES below), we step down through these zoom levels before
+# giving up.
+OCR_RENDER_ZOOM_LEVELS = (2.5, 1.8, 1.3)
+
+# JPEG quality levels tried at each zoom level, highest quality first.
+OCR_JPEG_QUALITIES = (85, 70, 55, 40)
+
+# Groq's meta-llama/llama-4-scout-17b-16e-instruct enforces a hard 4MB limit
+# on base64-encoded image request bodies (console.groq.com/docs/vision,
+# "Request Size Limit (Base64 Encoded Images)") -- this is what produced the
+# 413 "Request Entity Too Large" errors. A full page rendered at 2.5x zoom
+# (~180 DPI) as PNG easily exceeds that for image-heavy slides (photos,
+# gradients, embedded charts), since PNG doesn't compress that kind of
+# content well. JPEG does much better, so we render as JPEG and, if still
+# too big, step down quality and then resolution until the base64 payload
+# comfortably fits. Target is 3.8MB base64 (~2.85MB raw), leaving headroom
+# under the 4MB cap for the rest of the JSON request body.
+OCR_MAX_B64_BYTES = 3_800_000
+
+# SEPARATE from the byte-size cap above: Groq's vision pipeline also rejects
+# images over ~33.2 megapixels ("images can contain at most 33177600 pixels"
+# -- confirmed by the 400 errors seen in testing on a slide deck with
+# unusually large source page dimensions). JPEG quality does NOT reduce
+# pixel count, only file size, so the byte-size stepdown loop alone cannot
+# fix this -- a highly-compressed but still-oversized-in-pixels JPEG will
+# still get a 400. This has to be enforced as a hard cap on render zoom,
+# computed per-page from its actual point dimensions, before quality is
+# even considered.
+OCR_MAX_PIXELS = 33_000_000  # stay a hair under Groq's exact 33,177,600 cap
 
 OCR_PROMPT = (
     "This image is a page from a document (it may be a slide, scanned page, "
@@ -120,7 +149,71 @@ class DocumentIngestor:
     # ---- extraction ----------------------------------------------------
 
     @staticmethod
-    def _ocr_page(pdf_path: str, page_number: int) -> str:
+    def _render_page_jpeg(pdf_path: str, page_number: int) -> bytes:
+        """
+        Render a single 1-indexed PDF page to JPEG bytes that satisfy BOTH
+        of Groq's independent limits:
+          1. Pixel count (OCR_MAX_PIXELS) -- fixed only by rendering at a
+             lower zoom; JPEG quality cannot fix this, since quality only
+             changes compression, not width x height.
+          2. Base64 payload size (OCR_MAX_B64_BYTES) -- fixed by lowering
+             JPEG quality (cheap) and, if that's not enough, zoom too.
+
+        The pixel cap is computed per-page from its actual point dimensions
+        (page sizes vary -- a wide slide-exported page hits the pixel cap
+        at a much lower zoom than a standard A4/Letter page would), and is
+        applied as a hard ceiling on every zoom candidate before any
+        encoding is attempted. Only once a candidate is pixel-safe does the
+        quality stepdown loop run to also satisfy the byte-size cap.
+
+        If every combination is still over the byte-size limit (extremely
+        dense page even at the pixel-safe zoom), returns the smallest one
+        produced anyway -- vision_call will get a 413 from Groq for that
+        page, which extract_pages already catches and logs as a skipped
+        page rather than letting it crash the whole upload.
+        """
+        if fitz is None:
+            raise RuntimeError(
+                "PyMuPDF (fitz) is not installed — required to render "
+                "image-only PDF pages for OCR. Add 'PyMuPDF' to requirements.txt."
+            )
+        doc = fitz.open(pdf_path)
+        try:
+            page = doc[page_number - 1]
+            page_w, page_h = page.rect.width, page.rect.height  # points, 72/inch
+
+            # Highest zoom that keeps this specific page's rendered pixel
+            # count under the cap. Every configured zoom level is clamped
+            # to this ceiling -- for most normal pages the ceiling is above
+            # 2.5 and changes nothing; for oversized pages (like the one
+            # that triggered the 400s) it pulls every candidate down.
+            max_zoom_for_pixels = (OCR_MAX_PIXELS / (page_w * page_h)) ** 0.5
+
+            zoom_candidates = sorted(
+                {min(z, max_zoom_for_pixels) for z in OCR_RENDER_ZOOM_LEVELS},
+                reverse=True,
+            )
+
+            smallest: Optional[bytes] = None
+            for zoom in zoom_candidates:
+                if zoom <= 0:
+                    continue
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                for quality in OCR_JPEG_QUALITIES:
+                    data = pix.tobytes("jpeg", jpg_quality=quality)
+                    if smallest is None or len(data) < len(smallest):
+                        smallest = data
+                    # base64 inflates raw size by ~4/3; check against that
+                    # estimate rather than actually encoding every attempt.
+                    estimated_b64_len = (len(data) + 2) // 3 * 4
+                    if estimated_b64_len <= OCR_MAX_B64_BYTES:
+                        return data
+            return smallest  # best effort; caller/Groq will reject if still too big
+        finally:
+            doc.close()
+
+    @classmethod
+    def _ocr_page(cls, pdf_path: str, page_number: int) -> str:
         """
         Render a single 1-indexed PDF page to an image and OCR it via the
         Groq vision model (agent/vision.py). Used when pypdf's text layer
@@ -131,21 +224,9 @@ class DocumentIngestor:
         (extract_pages) decides whether one bad page should sink the whole
         document or just be skipped with a logged warning.
         """
-        if fitz is None:
-            raise RuntimeError(
-                "PyMuPDF (fitz) is not installed — required to render "
-                "image-only PDF pages for OCR. Add 'PyMuPDF' to requirements.txt."
-            )
-        doc = fitz.open(pdf_path)
-        try:
-            page = doc[page_number - 1]
-            pix = page.get_pixmap(matrix=fitz.Matrix(OCR_RENDER_ZOOM, OCR_RENDER_ZOOM))
-            image_bytes = pix.tobytes("png")
-        finally:
-            doc.close()
-
+        image_bytes = cls._render_page_jpeg(pdf_path, page_number)
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        text = vision_call(image_b64, OCR_PROMPT, image_format="png")
+        text = vision_call(image_b64, OCR_PROMPT, image_format="jpeg")
         return (text or "").strip()
 
     @classmethod

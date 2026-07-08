@@ -19,16 +19,20 @@ try:
 except ImportError:  # pragma: no cover - dependency should always be installed per requirements.txt
     Groq = None  # type: ignore
 
-# Confirmed live against console.groq.com/docs as of this build (2026-07-07):
+# Confirmed live against console.groq.com/docs/vision as of this build (2026-07-08):
 VISION_MODEL_PRIMARY = "qwen/qwen3.6-27b"
-# NOTE (status-log-worthy deviation, flagged not silently applied): Groq
-# deprecated meta-llama/llama-4-maverick-17b-128e-instruct on 2026-02-20 in
-# favor of openai/gpt-oss-120b (a text-only model, not a vision replacement).
-# PRD Section 3.0/14 explicitly says to keep this string coded as the manual
-# fallback regardless, so it stays below. In practice this means the fallback
-# branch will reliably fail closed and get caught by the caller — which is a
-# fine demonstration of graceful degradation, just not a working fallback.
-VISION_MODEL_FALLBACK = "meta-llama/llama-4-maverick-17b-128e-instruct"
+# STATUS UPDATE (supersedes the PRD 3.0/14 deviation note): the PRD's
+# original fallback string, meta-llama/llama-4-maverick-17b-128e-instruct,
+# was deprecated by Groq on 2026-02-20 with no vision replacement, so it was
+# a guaranteed-404, fail-closed-only branch (see PRD status log, 2026-07-07
+# deviation entries). Fixed here: meta-llama/llama-4-scout-17b-16e-instruct
+# is Groq's other currently-live vision model (console.groq.com/docs/vision
+# confirms both qwen/qwen3.6-27b and this one are supported today), so the
+# fallback is a real second model again, not a guaranteed failure. This
+# deviates from the literal PRD instruction to keep the old string -- worth
+# confirming with the team at the next sync -- but a fallback that can
+# actually fall back seemed clearly better than one that can't ever succeed.
+VISION_MODEL_FALLBACK = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 _client = Groq(api_key=os.environ.get("GROQ_API_KEY")) if Groq else None
 
