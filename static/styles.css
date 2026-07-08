@@ -85,6 +85,24 @@ body {
   100% { background-position: -200% 0; }
 }
 
+/* ---- live token-streaming "typing" cursor (Hybrid Chat / Doc Q&A / Image Studio) ---- */
+.typing-cursor {
+  display: inline-block;
+  margin-left: 1px;
+  animation: typing-blink 0.9s steps(1) infinite;
+  color: var(--pillar-documents, #2563EB);
+}
+@keyframes typing-blink {
+  0%, 49%  { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* ---- upload progress patience toast ---- */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ---- source citation pills, tinted per pillar ---- */
 .pill-document {
   background: rgba(37, 99, 235, 0.1);

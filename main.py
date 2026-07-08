@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
+import time
 import uuid
 from typing import Optional
 
@@ -47,6 +49,55 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Simple in-memory session store; matches the "ChromaDB is local/in-memory,
 # resets on restart" note already called out in README's Known Limitations.
 _SESSION_IMAGES: dict[str, list[str]] = {}
+
+# ---------------------------------------------------------------------------
+# Conversation history — per session_id, a flat list of {"role", "content"}
+# turns. This is what makes follow-up questions ("what team does HE play
+# for?" after "Who is MS Dhoni?") actually work: previously every call to
+# invoke_agent()/stream_agent() was seeded with ONLY the current message, so
+# the agent had zero memory of anything said earlier in the same session —
+# each turn ran as if it were a brand-new conversation. Now every /api/chat
+# and /api/stream call prepends this session's prior turns before the new
+# one, and appends the new turn once it's answered.
+#
+# Deliberately in-memory (matches _SESSION_IMAGES above) and deliberately
+# simple: only the raw user query text and the final assistant answer text
+# are stored — not tool calls/results — since that's enough context for
+# follow-ups and keeps re-sent history small and stable across turns.
+# ---------------------------------------------------------------------------
+_SESSION_HISTORY: dict[str, list[dict]] = {}
+# Cap how many prior turns get replayed, so a very long-running session
+# doesn't grow the prompt (and recursion-limit risk) unboundedly. 8 turns
+# (16 messages) is generous for follow-up-question continuity without
+# ballooning every subsequent call.
+_MAX_HISTORY_TURNS = 8
+
+
+def _get_history(session_id: str) -> list[dict]:
+    return _SESSION_HISTORY.get(session_id, [])
+
+
+def _append_history(session_id: str, role: str, content: str) -> None:
+    if not content:
+        return
+    history = _SESSION_HISTORY.setdefault(session_id, [])
+    history.append({"role": role, "content": content})
+    # Trim from the front, keeping the most recent turns.
+    max_messages = _MAX_HISTORY_TURNS * 2
+    if len(history) > max_messages:
+        del history[: len(history) - max_messages]
+
+
+# ---------------------------------------------------------------------------
+# PDF ingest progress — per upload_id (generated client-side per upload, so
+# multiple concurrent uploads in the same or different sessions don't clash),
+# the latest known progress snapshot. Written from the worker thread running
+# ingest_pdf_result() (see upload_pdf below), read by the SSE progress
+# endpoint. Plain dict writes/reads are safe here without an extra lock —
+# each upload_id is only ever written by its own single worker thread.
+# ---------------------------------------------------------------------------
+_INGEST_PROGRESS: dict[str, dict] = {}
+_INGEST_PROGRESS_LOCK = threading.Lock()
 
 
 class ChatRequest(BaseModel):
@@ -132,14 +183,26 @@ def _build_input_messages(req: ChatRequest) -> list[dict]:
     return [{"role": "user", "content": content}]
 
 
+def _build_full_messages(req: ChatRequest) -> list[dict]:
+    """History-aware message list: this session's prior turns (plain
+    user/assistant text, oldest first) followed by the newly-built current
+    turn (which carries the image/scope/cross-reference notes). This is what
+    gives the agent real conversational memory across turns instead of
+    treating every request as a brand-new, context-free conversation."""
+    return _get_history(req.session_id) + _build_input_messages(req)
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     """Chat Mode conversational response."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty")
     with use_session(req.session_id, _SESSION_IMAGES.get(req.session_id)):
-        result = invoke_agent(_build_input_messages(req))
-    return {"session_id": req.session_id, "answer": synthesize_chat(result)}
+        result = invoke_agent(_build_full_messages(req))
+    answer = synthesize_chat(result)
+    _append_history(req.session_id, "user", req.query)
+    _append_history(req.session_id, "assistant", answer)
+    return {"session_id": req.session_id, "answer": answer}
 
 
 @app.post("/api/chat/report")
@@ -148,14 +211,35 @@ def chat_report(req: ChatRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query must not be empty")
     with use_session(req.session_id, _SESSION_IMAGES.get(req.session_id)):
-        result = invoke_agent(_build_input_messages(req))
+        result = invoke_agent(_build_full_messages(req))
     report = synthesize_report(req.query, result)
+    # Reports aren't stored verbatim in history (they're structured JSON,
+    # not a natural conversational turn), but a short marker is, so a later
+    # follow-up question in Chat Mode ("what conflicts did that find?") still
+    # has something to anchor to.
+    _append_history(req.session_id, "user", req.query)
+    _append_history(
+        req.session_id,
+        "assistant",
+        f"[Generated an investigation report for: \"{req.query}\". "
+        f"Conclusion: {report.get('conclusion', '')}]",
+    )
     return {"session_id": req.session_id, "report": report}
 
 
 @app.post("/api/upload/pdf")
-async def upload_pdf(session_id: str = Form(...), file: UploadFile = File(...)):
-    """Hands off to Dhanya's rag/ingest.py, returns confirmation + chunk count."""
+async def upload_pdf(
+    session_id: str = Form(...),
+    file: UploadFile = File(...),
+    upload_id: Optional[str] = Form(None),
+):
+    """Hands off to Dhanya's rag/ingest.py, returns confirmation + chunk count.
+
+    upload_id (optional, client-generated) namespaces the real-time progress
+    exposed at GET /api/upload/progress/{upload_id}. If the client doesn't
+    send one (e.g. an older frontend build), progress just won't be
+    observable — ingestion itself is unaffected either way.
+    """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="only .pdf files are accepted")
 
@@ -174,6 +258,30 @@ async def upload_pdf(session_id: str = Form(...), file: UploadFile = File(...)):
             detail=f"PDF ingestion pipeline not yet available: {exc}",
         )
 
+    if upload_id:
+        with _INGEST_PROGRESS_LOCK:
+            _INGEST_PROGRESS[upload_id] = {
+                "stage": "starting",
+                "current": 0,
+                "total": 0,
+                "detail": "reading PDF",
+                "done": False,
+                "error": None,
+            }
+
+    def progress_cb(stage: str, current: int, total: int, detail: str) -> None:
+        if not upload_id:
+            return
+        with _INGEST_PROGRESS_LOCK:
+            _INGEST_PROGRESS[upload_id] = {
+                "stage": stage,
+                "current": current,
+                "total": total,
+                "detail": detail,
+                "done": False,
+                "error": None,
+            }
+
     try:
         # CRITICAL: ingest_pdf_result() is a long, blocking, synchronous call
         # (embedding model inference, ChromaDB writes, and -- worst case --
@@ -186,12 +294,48 @@ async def upload_pdf(session_id: str = Form(...), file: UploadFile = File(...)):
         # asyncio.to_thread runs it in a worker thread instead, keeping the
         # event loop free the whole time.
         result = await asyncio.to_thread(
-            ingest_pdf_result, dest_path, session_id=session_id
+            ingest_pdf_result,
+            dest_path,
+            session_id=session_id,
+            progress_cb=progress_cb,
         )
     except ValueError as exc:
         # e.g. every page was blank, or OCR failed on every image-only page
         # (bad GROQ_API_KEY, vision model unavailable, etc).
+        if upload_id:
+            with _INGEST_PROGRESS_LOCK:
+                _INGEST_PROGRESS[upload_id] = {
+                    "stage": "error",
+                    "current": 0,
+                    "total": 0,
+                    "detail": str(exc),
+                    "done": True,
+                    "error": str(exc),
+                }
         raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — surface to the progress stream too
+        if upload_id:
+            with _INGEST_PROGRESS_LOCK:
+                _INGEST_PROGRESS[upload_id] = {
+                    "stage": "error",
+                    "current": 0,
+                    "total": 0,
+                    "detail": str(exc),
+                    "done": True,
+                    "error": str(exc),
+                }
+        raise
+
+    if upload_id:
+        with _INGEST_PROGRESS_LOCK:
+            _INGEST_PROGRESS[upload_id] = {
+                "stage": "done",
+                "current": 1,
+                "total": 1,
+                "detail": "indexing complete",
+                "done": True,
+                "error": None,
+            }
 
     return {
         "session_id": session_id,
@@ -202,6 +346,43 @@ async def upload_pdf(session_id: str = Form(...), file: UploadFile = File(...)):
         # OCR instead (e.g. PPT-exported slides that are flattened images).
         "ocr_page_count": result.ocr_page_count,
     }
+
+
+@app.get("/api/upload/progress/{upload_id}")
+async def upload_progress(upload_id: str):
+    """SSE stream of real-time indexing progress for one upload (Section
+    'progressive progress bar' requirement). Driven entirely by the
+    progress_cb snapshots written from the actual ingest worker thread in
+    upload_pdf — never a simulated/timed fake progress bar. Ends the stream
+    once that upload reports done=True (success or error), or after a
+    generous timeout so a stream for an unknown/typo'd upload_id doesn't
+    hang forever."""
+
+    async def event_generator():
+        import json as _json
+
+        last_sent = None
+        waited = 0.0
+        poll_interval = 0.25
+        max_wait_seconds = 600  # 10 min safety ceiling
+
+        while waited < max_wait_seconds:
+            with _INGEST_PROGRESS_LOCK:
+                snapshot = _INGEST_PROGRESS.get(upload_id)
+            if snapshot is not None and snapshot != last_sent:
+                yield f"data: {_json.dumps(snapshot)}\n\n"
+                last_sent = snapshot
+                if snapshot.get("done"):
+                    break
+            await asyncio.sleep(poll_interval)
+            waited += poll_interval
+
+        # Clean up so the progress store doesn't grow unboundedly across
+        # many uploads over a long-running server process.
+        with _INGEST_PROGRESS_LOCK:
+            _INGEST_PROGRESS.pop(upload_id, None)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.post("/api/upload/image")
@@ -247,25 +428,45 @@ def end_session(session_id: str):
     return {"session_id": session_id, "status": "cleared"}
 
 
-def _serialize_event(event: dict) -> str:
-    """Turn one agent.stream() update into an SSE-friendly line. Only ever
-    forwards what actually happened in the run — never fabricates ordering or
-    content (Section 6.7)."""
+def _serialize_stream_item(mode: str, chunk) -> str:
+    """Turn one item from stream_agent() (now stream_mode=["updates",
+    "messages"], see agent/graph.py) into SSE-friendly line(s). Only ever
+    forwards what actually happened in the run — never fabricates ordering,
+    content, or timing (Section 6.7).
+
+    mode == "updates": chunk is the same {node_name: node_output} shape as
+    before — drives the reasoning-trace accordion (tool_call/tool_result/
+    ai_message events).
+
+    mode == "messages": chunk is (message_chunk, metadata) — a real
+    token-by-token delta of the model's own output as Groq streams it back.
+    Forwarded as {"type": "token", "content": "..."} so the frontend can
+    render a genuine typing effect instead of dumping the whole answer at
+    once. Chunks produced while the model is only assembling a tool call
+    (not writing its final answer) naturally have empty content and are
+    skipped here.
+    """
     import json as _json
 
     lines = []
-    for node_name, node_output in event.items():
-        messages = node_output.get("messages", []) if isinstance(node_output, dict) else []
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                lines.append({"type": "tool_result", "tool": msg.name, "content": str(msg.content)})
-            elif isinstance(msg, AIMessage):
-                if getattr(msg, "tool_calls", None):
-                    for tc in msg.tool_calls:
-                        lines.append({"type": "tool_call", "tool": tc["name"], "args": tc["args"]})
-                if msg.content:
-                    lines.append({"type": "ai_message", "node": node_name, "content": msg.content})
-    return "\n".join(f"data: {_json.dumps(line)}" for line in lines) + "\n\n"
+    if mode == "updates":
+        for node_name, node_output in chunk.items():
+            messages = node_output.get("messages", []) if isinstance(node_output, dict) else []
+            for msg in messages:
+                if isinstance(msg, ToolMessage):
+                    lines.append({"type": "tool_result", "tool": msg.name, "content": str(msg.content)})
+                elif isinstance(msg, AIMessage):
+                    if getattr(msg, "tool_calls", None):
+                        for tc in msg.tool_calls:
+                            lines.append({"type": "tool_call", "tool": tc["name"], "args": tc["args"]})
+                    if msg.content:
+                        lines.append({"type": "ai_message", "node": node_name, "content": msg.content})
+    elif mode == "messages":
+        message_chunk, _metadata = chunk
+        content = getattr(message_chunk, "content", None)
+        if content:
+            lines.append({"type": "token", "content": content})
+    return "\n".join(f"data: {_json.dumps(line)}" for line in lines) + ("\n\n" if lines else "")
 
 
 @app.get("/api/stream/{session_id}")
@@ -275,24 +476,54 @@ async def stream(
     scope: Optional[str] = None,
     cross_reference_documents: Optional[bool] = None,
 ):
-    """SSE stream of the live reasoning trace, driven by the real
-    agent.stream() output — not a simulated/fabricated trace."""
+    """SSE stream of the live reasoning trace AND the real token-by-token
+    final answer, driven entirely by the real agent.stream() output — never
+    a simulated/fabricated trace or a fake typing animation.
+
+    Also history-aware: this session's prior turns (see _SESSION_HISTORY)
+    are prepended before the new one via _build_full_messages, and the new
+    turn is appended once the run finishes — so a follow-up question asked
+    right after ("what team does he play for?") still has the earlier turn
+    ("Who is MS Dhoni?") in context instead of starting over from scratch.
+    """
+    req = ChatRequest(
+        session_id=session_id,
+        query=query,
+        scope=scope,
+        cross_reference_documents=cross_reference_documents,
+    )
 
     def event_generator():
-        messages = _build_input_messages(
-            ChatRequest(
-                session_id=session_id,
-                query=query,
-                scope=scope,
-                cross_reference_documents=cross_reference_documents,
-            )
-        )
+        import json as _json
+
+        messages = _build_full_messages(req)
+        last_ai_message: Optional[str] = None
         with use_session(session_id, _SESSION_IMAGES.get(session_id)):
-            for event in stream_agent(messages):
-                serialized = _serialize_event(event)
+            for mode, chunk in stream_agent(messages):
+                if mode == "updates":
+                    for _node_name, node_output in chunk.items():
+                        node_messages = (
+                            node_output.get("messages", []) if isinstance(node_output, dict) else []
+                        )
+                        for msg in node_messages:
+                            if isinstance(msg, AIMessage) and msg.content:
+                                # Last non-empty AIMessage content wins, same
+                                # rule the frontend used to apply itself —
+                                # intermediate reasoning content can appear
+                                # before the true final answer.
+                                last_ai_message = msg.content
+                serialized = _serialize_stream_item(mode, chunk)
                 if serialized.strip():
                     yield serialized
-        yield "data: {\"type\": \"done\"}\n\n"
+
+        if last_ai_message:
+            _append_history(session_id, "user", query)
+            _append_history(session_id, "assistant", last_ai_message)
+
+        # Final answer text is included here too (not just a bare "done")
+        # so the frontend has one authoritative value to fall back on if,
+        # for any reason, no token events came through.
+        yield f"data: {_json.dumps({'type': 'done', 'content': last_ai_message})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

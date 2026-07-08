@@ -25,7 +25,13 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional
+
+# stage, current, total, detail -> None. Called throughout ingest_pdf() so
+# callers (main.py) can surface real progress instead of an indeterminate
+# spinner. Stages: "text", "ocr_start", "ocr_done", "ocr_failed", "chunking",
+# "embedding", "done".
+ProgressCallback = Callable[[str, int, int, str], None]
 
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -230,7 +236,9 @@ class DocumentIngestor:
         return (text or "").strip()
 
     @classmethod
-    def extract_pages(cls, pdf_path: str) -> List[PageText]:
+    def extract_pages(
+        cls, pdf_path: str, progress_cb: Optional[ProgressCallback] = None
+    ) -> List[PageText]:
         """
         Extract text per page, 1-indexed. This is the step that makes
         page-level citation possible later -- do not collapse this into a
@@ -241,6 +249,10 @@ class DocumentIngestor:
         vision model instead, so image-only pages (scans, PPT-exported
         slides) still produce searchable text. A page that fails OCR is
         logged and skipped rather than aborting the whole document.
+
+        progress_cb, if given, is called as progress_cb(stage, current,
+        total, detail) after every page so callers (main.py) can drive a
+        real progress bar instead of an indeterminate spinner.
         """
         reader = PdfReader(pdf_path)
         total_pages = len(reader.pages)
@@ -249,6 +261,8 @@ class DocumentIngestor:
             text = (page.extract_text() or "").strip()
             if len(text) >= OCR_TEXT_THRESHOLD_CHARS:
                 pages.append(PageText(page_number=i, text=text, ocr=False))
+                if progress_cb:
+                    progress_cb("text", i, total_pages, f"page {i}/{total_pages}")
                 continue
 
             # This is a real network round-trip to Groq and can take
@@ -258,6 +272,8 @@ class DocumentIngestor:
             # 60s client timeout in agent/vision.py, which bounds how long
             # any single page can block this loop.
             logger.info("OCR: page %d/%d of '%s' -- starting", i, total_pages, pdf_path)
+            if progress_cb:
+                progress_cb("ocr_start", i, total_pages, f"OCR: page {i}/{total_pages}")
             try:
                 ocr_text = cls._ocr_page(pdf_path, i)
             except Exception as exc:  # noqa: BLE001
@@ -268,6 +284,8 @@ class DocumentIngestor:
                 # (could be nothing) rather than losing the page silently.
                 if text:
                     pages.append(PageText(page_number=i, text=text, ocr=False))
+                if progress_cb:
+                    progress_cb("ocr_failed", i, total_pages, f"page {i}/{total_pages} failed, skipped")
                 continue
             logger.info("OCR: page %d/%d of '%s' -- done (%d chars)", i, total_pages, pdf_path, len(ocr_text or ""))
 
@@ -276,6 +294,8 @@ class DocumentIngestor:
             elif text:
                 pages.append(PageText(page_number=i, text=text, ocr=False))
             # else: genuinely blank page (e.g. a section divider) -- skip.
+            if progress_cb:
+                progress_cb("ocr_done", i, total_pages, f"OCR: page {i}/{total_pages} done")
 
         return pages
 
@@ -319,7 +339,11 @@ class DocumentIngestor:
     # ---- public API --------------------------------------------------------
 
     def ingest_pdf(
-        self, pdf_path: str, filename: Optional[str] = None, session_id: str = "default"
+        self,
+        pdf_path: str,
+        filename: Optional[str] = None,
+        session_id: str = "default",
+        progress_cb: Optional[ProgressCallback] = None,
     ) -> IngestResult:
         """
         Ingest a single PDF file into ChromaDB.
@@ -333,6 +357,10 @@ class DocumentIngestor:
                 uploading session's own retrieve() calls can ever see them.
                 Required for real multi-user isolation — see the SESSION
                 ISOLATION note in retrieve.py.
+            progress_cb: optional real-time progress callback (see
+                ProgressCallback above), called through extraction/OCR,
+                chunking, and embedding so callers can drive a real progress
+                bar instead of an indeterminate spinner.
 
         Returns:
             IngestResult with chunk_count, used by the
@@ -340,7 +368,7 @@ class DocumentIngestor:
         """
         filename = filename or os.path.basename(pdf_path)
 
-        pages = self.extract_pages(pdf_path)
+        pages = self.extract_pages(pdf_path, progress_cb=progress_cb)
         if not pages:
             raise ValueError(
                 f"No extractable text or OCR-able content found in '{filename}'. "
@@ -348,10 +376,14 @@ class DocumentIngestor:
                 "(check GROQ_API_KEY / vision model availability)."
             )
 
+        if progress_cb:
+            progress_cb("chunking", 0, 1, "splitting extracted text into chunks")
         ids, documents, metadatas = self._chunk_pages(filename, pages, session_id)
         if not documents:
             raise ValueError(f"'{filename}' produced no chunks after splitting.")
 
+        if progress_cb:
+            progress_cb("embedding", 0, 1, f"embedding {len(documents)} chunks")
         embeddings = self._embeddings.embed_documents(documents)
 
         self._collection.upsert(
@@ -360,6 +392,9 @@ class DocumentIngestor:
             metadatas=metadatas,
             embeddings=embeddings,
         )
+
+        if progress_cb:
+            progress_cb("done", 1, 1, "indexing complete")
 
         return IngestResult(
             filename=filename,
@@ -420,14 +455,22 @@ def ingest_pdf(pdf_path: str, session_id: Optional[str] = None) -> int:
     return _ingest_pdf_impl(pdf_path, session_id).chunk_count
 
 
-def ingest_pdf_result(pdf_path: str, session_id: Optional[str] = None) -> IngestResult:
+def ingest_pdf_result(
+    pdf_path: str,
+    session_id: Optional[str] = None,
+    progress_cb: Optional[ProgressCallback] = None,
+) -> IngestResult:
     """Same as ingest_pdf() but returns the full IngestResult (chunk_count,
     page_count, ocr_page_count) so callers can tell the user how many pages
     needed OCR."""
-    return _ingest_pdf_impl(pdf_path, session_id)
+    return _ingest_pdf_impl(pdf_path, session_id, progress_cb=progress_cb)
 
 
-def _ingest_pdf_impl(pdf_path: str, session_id: Optional[str]) -> IngestResult:
+def _ingest_pdf_impl(
+    pdf_path: str,
+    session_id: Optional[str],
+    progress_cb: Optional[ProgressCallback] = None,
+) -> IngestResult:
     filename = os.path.basename(pdf_path)
     if session_id:
         prefix = f"{session_id}_"
@@ -435,7 +478,10 @@ def _ingest_pdf_impl(pdf_path: str, session_id: Optional[str]) -> IngestResult:
             filename = filename[len(prefix):]
 
     return get_ingestor().ingest_pdf(
-        pdf_path, filename=filename, session_id=session_id or "default"
+        pdf_path,
+        filename=filename,
+        session_id=session_id or "default",
+        progress_cb=progress_cb,
     )
 
 
