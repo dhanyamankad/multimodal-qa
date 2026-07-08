@@ -243,6 +243,7 @@ class DocumentIngestor:
         logged and skipped rather than aborting the whole document.
         """
         reader = PdfReader(pdf_path)
+        total_pages = len(reader.pages)
         pages: List[PageText] = []
         for i, page in enumerate(reader.pages, start=1):
             text = (page.extract_text() or "").strip()
@@ -250,17 +251,25 @@ class DocumentIngestor:
                 pages.append(PageText(page_number=i, text=text, ocr=False))
                 continue
 
+            # This is a real network round-trip to Groq and can take
+            # several seconds per page; log before/after so a multi-page
+            # OCR run shows visible progress in the terminal instead of
+            # long silent gaps that look identical to a hang. See also the
+            # 60s client timeout in agent/vision.py, which bounds how long
+            # any single page can block this loop.
+            logger.info("OCR: page %d/%d of '%s' -- starting", i, total_pages, pdf_path)
             try:
                 ocr_text = cls._ocr_page(pdf_path, i)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "OCR failed for page %d of '%s': %s", i, pdf_path, exc
+                    "OCR failed for page %d/%d of '%s': %s", i, total_pages, pdf_path, exc
                 )
                 # Fall back to whatever tiny scrap of text pypdf did find
                 # (could be nothing) rather than losing the page silently.
                 if text:
                     pages.append(PageText(page_number=i, text=text, ocr=False))
                 continue
+            logger.info("OCR: page %d/%d of '%s' -- done (%d chars)", i, total_pages, pdf_path, len(ocr_text or ""))
 
             if ocr_text:
                 pages.append(PageText(page_number=i, text=ocr_text, ocr=True))

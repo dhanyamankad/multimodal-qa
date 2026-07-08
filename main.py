@@ -8,6 +8,8 @@ endpoints the frontend calls against.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import uuid
 from typing import Optional
@@ -15,6 +17,13 @@ from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Without this, the root logger defaults to WARNING and INFO-level progress
+# logs (e.g. rag/ingest.py's per-page OCR progress) are silently dropped --
+# which is exactly what made a slow-but-working upload look identical to a
+# hung one in the terminal. uvicorn configures its own loggers but not the
+# app's; this line is what makes ours actually show up.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -166,7 +175,19 @@ async def upload_pdf(session_id: str = Form(...), file: UploadFile = File(...)):
         )
 
     try:
-        result = ingest_pdf_result(dest_path, session_id=session_id)
+        # CRITICAL: ingest_pdf_result() is a long, blocking, synchronous call
+        # (embedding model inference, ChromaDB writes, and -- worst case --
+        # up to one sequential Groq network round-trip per OCR'd page).
+        # Calling it directly here would block FastAPI's single asyncio
+        # event loop for the entire duration: no other request (not even an
+        # unrelated /api/chat call, a health check, or a second upload)
+        # could be served until it finished, which is indistinguishable
+        # from the server hanging even though it's technically "working."
+        # asyncio.to_thread runs it in a worker thread instead, keeping the
+        # event loop free the whole time.
+        result = await asyncio.to_thread(
+            ingest_pdf_result, dest_path, session_id=session_id
+        )
     except ValueError as exc:
         # e.g. every page was blank, or OCR failed on every image-only page
         # (bad GROQ_API_KEY, vision model unavailable, etc).

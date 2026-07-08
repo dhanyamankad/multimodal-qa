@@ -34,7 +34,15 @@ VISION_MODEL_PRIMARY = "qwen/qwen3.6-27b"
 # actually fall back seemed clearly better than one that can't ever succeed.
 VISION_MODEL_FALLBACK = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-_client = Groq(api_key=os.environ.get("GROQ_API_KEY")) if Groq else None
+_client = Groq(api_key=os.environ.get("GROQ_API_KEY"), timeout=60.0) if Groq else None
+# 60s per call: the Groq SDK has no timeout by default, which means a
+# stalled connection (flaky network, Groq-side stall) would hang forever --
+# and since rag/ingest.py's OCR loop makes one of these calls per page,
+# sequentially, a single stuck call would look exactly like the whole
+# upload silently freezing with no way to tell it apart from "still
+# working." Bounding it means a bad call fails within 60s, gets caught by
+# extract_pages' try/except, and that one page is logged and skipped
+# instead of hanging the entire request indefinitely.
 
 
 def get_vision_client():
