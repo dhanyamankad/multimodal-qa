@@ -10,7 +10,7 @@ pinned: false
 
 # Multimodal Q&A Pro — ByteSized Brains
 
-GenAI Summer of Code · Hackathon 2026 · Problem Statement 5 (Hard)
+GenAI Summer of Code · Hackathon 2026 · Problem Statement 5
 
 An agentic Q&A assistant that reasons across **your uploaded documents**,
 **live web search**, and **images** — and decides on its own which source(s)
@@ -106,9 +106,9 @@ server restart.
 
 ## Setup (local development)
 
-1. `git clone <this-repo-url>`
+1. `git clone "https://github.com/dhanyamankad/multimodal-qa.git"`
 2. `cd multimodal-qa`
-3. `python -m venv .venv && source .venv/bin/activate`
+3. `python -m venv .venv && venv\Scripts\Activate`
 4. `pip install -r requirements.txt`
 5. Copy `.env.example` to `.env` and add your real `GROQ_API_KEY`
 6. `uvicorn main:app --reload --port 7860`
@@ -120,10 +120,6 @@ server restart.
 docker build -t multimodal-qa .
 docker run -p 7860:7860 --env-file .env multimodal-qa
 ```
-
-## Live Demo
-
-`[ADD HF SPACES URL HERE BEFORE SUBMISSION]`
 
 ## Tech stack
 
@@ -138,14 +134,11 @@ docker run -p 7860:7860 --env-file .env multimodal-qa
 
 ## Test scenarios covered
 
-**PS5 (organizer-mandated):**
 1. Pure document question → only `search_documents` fires
 2. Image + doc cross-reference → `describe_image` → `search_documents` in order
 3. Current-info question, no relevant docs → clean fallback to `search_web`
 4. Simulated web search timeout → UI reports failure gracefully, no crash
 5. Cold live HF Spaces URL → full query works, zero local setup
-
-**PS4-style (self-imposed, via Report Mode):**
 6. Doc-only question → no unnecessary web search
 7. No answer in docs, answerable on web → clean fallback
 8. Outdated doc fact vs. current web fact → `conflicts` correctly populated
@@ -169,5 +162,4 @@ docker run -p 7860:7860 --env-file .env multimodal-qa
 ## Secrets
 
 `GROQ_API_KEY` is read via `os.environ.get("GROQ_API_KEY")`. Locally it
-comes from `.env` (gitignored, see `.env.example`). On HF Spaces it's set
-under Settings → Repository Secrets — never hardcoded.
+comes from `.env` (gitignored, see `.env.example`). 
