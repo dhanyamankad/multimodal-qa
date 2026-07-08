@@ -102,9 +102,14 @@ body {
   color: var(--pillar-vision);
 }
 
-/* ---- tab panels ---- */
-.tab-panel { display: none; }
-.tab-panel.active { display: flex; }
+/* ---- tab panels ----
+   !important is required here: the Tailwind Play CDN (cdn.tailwindcss.com)
+   injects its generated utility stylesheet asynchronously and does not
+   reliably respect this file's position in <head>, so utility classes like
+   .flex/.flex-1 on the same <section> elements can win the cascade tie
+   against these rules without it. See tailwindlabs/tailwindcss#8245. */
+.tab-panel { display: none !important; }
+.tab-panel.active { display: flex !important; }
 
 /* ---- demo-mode badge: shown only while the UI is running against mock
    data because no live backend is reachable yet. Never silently pretend
