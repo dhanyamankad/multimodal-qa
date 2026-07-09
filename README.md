@@ -16,6 +16,23 @@ An agentic Q&A assistant that reasons across **your uploaded documents**,
 **live web search**, and **images** — and decides on its own which source(s)
 a question actually needs, instead of always querying everything.
 
+**🔗 Live deployment:** [dvmultimodal-qa.onrender.com](https://dvmultimodal-qa.onrender.com/)
+
+> Hosted on Render's free tier — the instance spins down after periods of
+> inactivity, so the first request after a while may take 30-60 seconds to
+> wake it back up. Subsequent requests are fast.
+
+## Demo
+
+A full walkthrough video and screenshots of all three screens are in the
+[`media/`](./media) folder.
+
+| Hybrid Chat | Document Q&A | Image Studio |
+|---|---|---|
+| ![Hybrid Chat](./media/hybrid-chat.png) | ![Document Q&A](./media/document-qa.png) | ![Image Studio](./media/image-studio.png) |
+
+📹 **Demo video:** see [`media/`](./media) for the full recorded walkthrough.
+
 ## Team
 - **Dhanya** — RAG pipeline, frontend/UI architecture, deployment operations
 - **Vanshi** — Backend systems, agentic routing (LangGraph), LLM/synthesis logic
@@ -58,8 +75,9 @@ streamed back to the UI over SSE as the agent runs.
 
 ```
 Custom UI (static/) → FastAPI (Uvicorn) → LangGraph create_react_agent
-  (recursion_limit=12)
+  (recursion_limit=25)
     ├─ search_documents  → ChromaDB (session-scoped retrieval, confidence-thresholded)
+    │                       embeddings via HF Inference API (see note below)
     ├─ search_web        → DuckDuckGo search
     └─ describe_image    → Groq vision model (primary + fallback)
   → synthesis layer (Chat Mode or Report Mode)
@@ -80,6 +98,19 @@ ChromaDB collection with per-chunk `filename` + `page_number` metadata for
 citations. Retrieval is filtered by a calibrated similarity threshold so
 irrelevant chunks are reported as "not found" rather than forced into an
 answer, and every query is scoped to the requesting session's own uploads.
+
+**Note on embeddings — API-based, not local:** the embedding model
+(`sentence-transformers/all-MiniLM-L6-v2`) is called through Hugging Face's
+free serverless Inference API (`rag/hf_embeddings.py`) rather than loaded
+locally via `sentence-transformers`/`torch`. This was changed after the
+initial deployment attempt — `torch` alone adds 700MB-1GB+ to the container
+and a comparable chunk of resident RAM, which exceeded the 512MB RAM ceiling
+on free-tier hosts (Render, Fly.io) once real traffic came in. Moving the
+embedding call out to HF's hosted inference keeps the exact same model and
+retrieval quality, at the cost of a small network round-trip per
+upload/query and being subject to HF's free-tier rate limits. Requires an
+`HF_TOKEN` (free Hugging Face account, no card needed) — see **Secrets**
+below.
 
 ### Vision
 
@@ -110,7 +141,9 @@ server restart.
 2. `cd multimodal-qa`
 3. `python -m venv .venv && venv\Scripts\Activate`
 4. `pip install -r requirements.txt`
-5. Copy `.env.example` to `.env` and add your real `GROQ_API_KEY`
+5. Copy `.env.example` to `.env` and add your real `GROQ_API_KEY` and
+   `HF_TOKEN` (free Hugging Face account → Settings → Access Tokens, "Read"
+   scope, no card required)
 6. `uvicorn main:app --reload --port 7860`
 7. Open `http://localhost:7860`
 
@@ -127,7 +160,8 @@ docker run -p 7860:7860 --env-file .env multimodal-qa
 - **Agent orchestration:** LangGraph (`create_react_agent`), LangChain
 - **LLMs:** Groq (`openai/gpt-oss-120b` for reasoning, Groq vision models for
   image understanding/OCR)
-- **Retrieval:** ChromaDB, `sentence-transformers/all-MiniLM-L6-v2`
+- **Retrieval:** ChromaDB, embeddings via HF Inference API
+  (`sentence-transformers/all-MiniLM-L6-v2`, called remotely — see RAG note above)
 - **PDF processing:** `pypdf`, `PyMuPDF`, `pdfplumber`
 - **Web search:** DuckDuckGo (`ddgs`)
 - **Frontend:** static HTML/CSS/JS (Tailwind), no build step
@@ -138,7 +172,8 @@ docker run -p 7860:7860 --env-file .env multimodal-qa
 2. Image + doc cross-reference → `describe_image` → `search_documents` in order
 3. Current-info question, no relevant docs → clean fallback to `search_web`
 4. Simulated web search timeout → UI reports failure gracefully, no crash
-5. Cold live HF Spaces URL → full query works, zero local setup
+5. Cold live Render URL → full query works, zero local setup (free-tier
+   instance spins up from sleep on the first request)
 6. Doc-only question → no unnecessary web search
 7. No answer in docs, answerable on web → clean fallback
 8. Outdated doc fact vs. current web fact → `conflicts` correctly populated
@@ -158,8 +193,22 @@ docker run -p 7860:7860 --env-file .env multimodal-qa
 - **Web search** uses DuckDuckGo's unauthenticated search and can be flaky
   or rate-limited under load; failures degrade to a clear "unavailable"
   message rather than crashing.
+- **Embeddings depend on HF Inference API availability** — since embeddings
+  are no longer computed locally (see RAG note above), document upload and
+  retrieval require outbound network access to
+  `router.huggingface.co` and are subject to its free-tier rate limits and
+  occasional cold-start delays (handled with retry/backoff in
+  `rag/hf_embeddings.py`).
 
 ## Secrets
 
-`GROQ_API_KEY` is read via `os.environ.get("GROQ_API_KEY")`. Locally it
-comes from `.env` (gitignored, see `.env.example`). 
+- `GROQ_API_KEY` — read via `os.environ.get("GROQ_API_KEY")`. Powers the
+  reasoning model and vision (image understanding/OCR).
+- `HF_TOKEN` — read via `os.environ.get("HF_TOKEN")` in
+  `rag/hf_embeddings.py`. Free Hugging Face access token (Settings → Access
+  Tokens, "Read" scope), used to call the embeddings model through HF's
+  serverless Inference API instead of loading it locally (see RAG note
+  above).
+
+Locally both come from `.env` (gitignored, see `.env.example`). On Render,
+both are set as environment variables in the service's **Environment** tab.
