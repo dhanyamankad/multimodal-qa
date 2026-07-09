@@ -32,7 +32,7 @@ ProgressCallback = Callable[[str, int, int, str], None]
 
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+from rag.hf_embeddings import HFInferenceEmbeddings
 import chromadb
 from chromadb.config import Settings
 
@@ -117,7 +117,7 @@ class DocumentIngestor:
             path=persist_dir,
             settings=Settings(anonymized_telemetry=False),
         )
-        self._embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
+        self._embeddings = HFInferenceEmbeddings()
         self._collection = self._client.get_or_create_collection(name=collection_name)
         self._splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
