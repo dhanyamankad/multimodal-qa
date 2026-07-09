@@ -485,7 +485,7 @@ function appendUserBubble(containerId, text) {
 function appendAiBubble(containerId, text) {
   const el = document.createElement("div");
   el.className = "flex flex-col items-start max-w-[95%]";
-  el.innerHTML = `<div class="bg-surface-container rounded-2xl rounded-tl-none p-gutter border border-outline-variant/30"><p class="text-body-md text-on-surface">${escapeHtml(text)}</p></div>`;
+  el.innerHTML = `<div class="bg-surface-container rounded-2xl rounded-tl-none p-gutter border border-outline-variant/30"><div class="text-body-md text-on-surface">${renderMarkdown(text)}</div></div>`;
   document.getElementById(containerId).appendChild(el);
   el.scrollIntoView({ behavior: "smooth" });
 }
@@ -493,6 +493,45 @@ function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+// Minimal, safe Markdown -> HTML for AI answer text. Escapes first (so raw
+// HTML/script in a model response can never inject), then layers on just
+// the handful of Markdown constructs these answers actually use: **bold**,
+// "- " bullet lists, and blank-line-separated paragraphs. Not a full
+// Markdown parser on purpose -- this only needs to cover what the agent's
+// synthesis layer actually produces.
+function renderMarkdown(str) {
+  const escaped = escapeHtml(str || "");
+  const withBold = escaped.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+  const lines = withBold.split(/\n/);
+  let html = "";
+  let inList = false;
+  const closeList = () => {
+    if (inList) {
+      html += "</ul>";
+      inList = false;
+    }
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (/^-\s+/.test(line)) {
+      if (!inList) {
+        html += '<ul class="list-disc pl-lg space-y-1">';
+        inList = true;
+      }
+      html += `<li>${line.replace(/^-\s+/, "")}</li>`;
+    } else if (line === "") {
+      closeList();
+    } else {
+      closeList();
+      html += `<p class="mb-2 last:mb-0">${line}</p>`;
+    }
+  }
+  closeList();
+  return html;
 }
 
 // ---------------------------------------------------------------------------
@@ -859,6 +898,22 @@ function beginLiveTrace(threadId, query, onFinalAnswer, options = {}) {
   let answerBubbleEl = null;
   let answerTextEl = null;
   let streamedText = "";
+  let lastError = null;
+
+  // Translates the raw exception string the backend forwards (main.py's
+  // `except Exception as exc: q.put(("error", str(exc)))`) into something
+  // a user should actually see, instead of the generic "stream ended
+  // without a final message" fallback. Rate limiting on the LLM provider
+  // is the one case worth calling out by name, since "try again shortly"
+  // is genuinely actionable advice here -- everything else gets a generic
+  // but still honest message rather than a raw stack-trace-flavored string.
+  function friendlyErrorMessage(rawError) {
+    const msg = String(rawError || "").toLowerCase();
+    if (msg.includes("429") || msg.includes("rate_limit") || msg.includes("rate limit")) {
+      return "We're being rate-limited by the AI provider right now. Please wait a few seconds and try again.";
+    }
+    return "Something went wrong while generating a response. Please try again in a moment.";
+  }
 
   function ensureAnswerBubble() {
     if (answerBubbleEl) return;
@@ -880,6 +935,17 @@ function beginLiveTrace(threadId, query, onFinalAnswer, options = {}) {
     if (answerBubbleEl) {
       const cursor = answerBubbleEl.querySelector("[data-typing-cursor]");
       if (cursor) cursor.remove();
+    }
+  }
+
+  // Tokens stream in as plain text (appendToken above) so a Markdown marker
+  // split across two token chunks (e.g. "**" arriving as "*" then "*")
+  // never renders half-converted mid-stream. Once the run is done and the
+  // full text is known, re-render it once through renderMarkdown so bold/
+  // lists show up correctly in the final, settled answer.
+  function finalizeAnswerBubble(fullText) {
+    if (answerTextEl && fullText) {
+      answerTextEl.innerHTML = renderMarkdown(fullText);
     }
   }
 
@@ -923,9 +989,30 @@ function beginLiveTrace(threadId, query, onFinalAnswer, options = {}) {
         // for whatever reason, no token events came through.
         addStep(traceEvent.content);
         lastAiMessage = traceEvent.content;
+      } else if (traceEvent.type === "error") {
+        lastError = traceEvent.content;
+        console.warn("[agent error]", traceEvent.content);
+        addStep(`⚠ ${friendlyErrorMessage(traceEvent.content)}`);
       } else if (traceEvent.type === "done") {
         if (es) es.close();
-        resolveOnce(traceEvent.content || lastAiMessage, true);
+        const completedAnswer = traceEvent.content || lastAiMessage || null;
+        const finalText = completedAnswer || streamedText || null;
+        if (finalText) {
+          finalizeAnswerBubble(finalText);
+          if (!completedAnswer && lastError) {
+            // Text streamed in, but the run errored before a proper final
+            // answer arrived (e.g. rate-limited mid-response) -- flag that
+            // explicitly rather than silently presenting a cut-off answer
+            // as if it were complete.
+            const note = document.createElement("p");
+            note.className = "text-body-sm text-on-surface-variant italic mt-xs px-gutter";
+            note.textContent = `⚠ ${friendlyErrorMessage(lastError)}`;
+            answerBubbleEl.appendChild(note);
+          }
+          resolveOnce(finalText, true);
+        } else {
+          resolveOnce(lastError ? friendlyErrorMessage(lastError) : null, true);
+        }
       }
     },
     () => resolveOnce(null, false), // connection never established
