@@ -32,7 +32,7 @@ import requests
 logger = logging.getLogger("rag.hf_embeddings")
 
 HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+HF_API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}/pipeline/feature-extraction"
 BATCH_SIZE = 32
 MAX_RETRIES = 5
 INITIAL_BACKOFF_SECONDS = 2.0
