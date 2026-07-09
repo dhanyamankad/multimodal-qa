@@ -24,14 +24,22 @@ a question actually needs, instead of always querying everything.
 
 ## Demo
 
-A full walkthrough video and screenshots of all three screens are in the
+A full walkthrough video and screenshots of all four screens are in the
 [`media/`](./media) folder.
 
-| Hybrid Chat | Document Q&A | Image Studio |
-|---|---|---|
-| ![Hybrid Chat](./media/hybrid-chat.png) | ![Document Q&A](./media/document-qa.png) | ![Image Studio](./media/image-studio.png) |
+#### Welcome Screen
+![Welcome Screen](./media/welcome-screen.png)
 
-📹 **Demo video:** see [`media/`](./media) for the full recorded walkthrough.
+#### Hybrid Chat
+![Hybrid Chat](./media/hybrid-chat.png)
+
+#### Document Q&A
+![Document Q&A](./media/document-qa.png)
+
+#### Image Studio
+![Image Studio](./media/image-studio.png)
+
+📹 **Demo video:** see [`media/demo_video.mp4`](./media/demo_video.mp4) for the full recorded walkthrough.
 
 ## Team
 - **Dhanya** — RAG pipeline, frontend/UI architecture, deployment operations
