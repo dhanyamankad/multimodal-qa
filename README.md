@@ -39,7 +39,7 @@ A full walkthrough video and screenshots of all four screens are in the
 #### Image Studio
 ![Image Studio](./media/image-studio.png)
 
-📹 **Demo video:** see [`media/demo_video_link.txt`](./media/demo_video_link.txt) for the full recorded walkthrough. (Kindly open the Google Drive link attached to view the video )
+📹 **Demo Video:** Watch the full recorded walkthrough [here](https://drive.google.com/file/d/1Es0QbsBfwaHBU6wuc1-i6Wz55Gz1Hs7m/view?usp=sharing).
 
 ## Team
 - **Dhanya** — RAG pipeline, frontend/UI architecture, deployment operations
